@@ -140,6 +140,76 @@ def cleanup_files(opts):
                     print(f"Error deleting {os.path.basename(file)}: {e}")
 
 def main():
+
+    # Argument parsing moved to top to ensure opts is always assigned
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-c', '--config', required=True, help='Configuration (.par) file for SAGE input', type=_abspath)
+    parser.add_argument('-v', '--subvolumes', help='Comma- and dash-separated list of subvolumes to process', default='0')
+    parser.add_argument('-b', '--sage-binary', required=True, help='Path to the SAGE binary to use', type=_abspath)
+    parser.add_argument('-o', '--outdir', help='Auxiliary output directory, defaults to .', default=_abspath('.'),
+                        type=_abspath)
+    parser.add_argument('-k', '--keep', help='Keep temporary output files', action='store_true')
+    parser.add_argument('-sn', '--snapshot', help='Comma-separated list of snapshot numbers to analyze', 
+                   type=lambda x: [int(i) for i in x.split(',')], default=None)
+    parser.add_argument('--sim', help='Simulation to use (0=miniUchuu, 1=miniMillennium, 2=MTNG)', 
+                   type=int, default=0)
+    parser.add_argument('--boxsize', help='Size of the simulation box in Mpc/h', 
+                    type=float, default=400.0)
+    parser.add_argument('--vol-frac', help='Volume fraction of the simulation box', 
+                    type=float, default=0.0019)
+    parser.add_argument('--age-alist-file', help='Path to the age list file, match with .par file',
+                   default=None, type=_abspath)
+    parser.add_argument('--Omega0', help='Omega0 value for the simulation', 
+                    type=float, default=0.3089)
+    parser.add_argument('--h0', help='H0 value for the simulation', 
+                    type=float, default=0.677400)
+
+    pso_opts = parser.add_argument_group('PSO options')
+    pso_opts.add_argument('-s', '--swarm-size', help='Size of the particle swarm. Defaults to 10 + sqrt(D) * 2 (D=number of dimensions)',
+                          type=int, default=None)
+    pso_opts.add_argument('-m', '--max-iterations', help='Maximum number of iterations to reach before giving up, defaults to 20',
+                          default=10, type=int)
+    pso_opts.add_argument('-S', '--space-file', help='File with the search space specification, defaults to space.txt',
+                          default='space.txt', type=_abspath)
+    pso_opts.add_argument('-t', '--stat-test', help='Stat function used to calculate the value of a particle, defaults to student-t',
+                          default='student-t', choices=list(analysis.stat_tests.keys()))
+    pso_opts.add_argument('-x', '--constraints', default='BHMF,SMF_z0,BHBM',
+                          help=("Comma-separated list of constraints, any of BHMF, SMF_z0 or BHBM, defaults to 'BHMF,SMF_z0,BHBM'. "
+                                "Can specify a domain range after the name (e.g., 'SMF_z0(8-11)')"
+                                "and/or a relative weight (e.g. 'BHMF*6,SMF_z0(8-11)*10)'") )
+    pso_opts.add_argument('-csv', '--csv-output', help='Path to save PSO results as CSV file. If not specified, no CSV will be generated.',
+                      type=_abspath, default=None)
+    pso_opts.add_argument('-r', '--random-seed', help='Random seed for reproducibility. If not specified, PSO will use random initialization.',
+                      type=int, default=None)
+    pso_opts.add_argument('--omega', help='PSO inertia weight (default: 0.729). Standard constriction coefficient from Clerc & Kennedy (2002).',
+                      type=float, default=0.729)
+    pso_opts.add_argument('--phip', help='PSO cognitive parameter (default: 1.49445). Particle learning from own best. Standard value ~1.5-2.0.',
+                      type=float, default=1.49445)
+    pso_opts.add_argument('--phig', help='PSO social parameter (default: 1.49445). Particle learning from swarm best. Standard value ~1.5-2.0.',
+                      type=float, default=1.49445)
+
+    hpc_opts = parser.add_argument_group('HPC options')
+    hpc_opts.add_argument('-H', '--hpc-mode', help='Enable HPC mode', action='store_true')
+    hpc_opts.add_argument('-C', '--cpus', help='Number of CPUs per sage instance', default=1, type=int)
+    hpc_opts.add_argument('-M', '--memory', help='Memory needed by each sage instance', default='1500m')
+    hpc_opts.add_argument('-N', '--nodes', help='Number of nodes to use', default=None, type=int)
+    hpc_opts.add_argument('-a', '--account', help='Submit jobs using this account', default=None)
+    hpc_opts.add_argument('-q', '--queue', help='Submit jobs to this queue', default=None)
+    hpc_opts.add_argument('-w', '--walltime', help='Walltime for each submission, defaults to 1:00:00', default='1:00:00')
+    hpc_opts.add_argument('-u', '--username', help='Username for SLURM job submission', default=None)
+
+    opts = parser.parse_args()
+
+    if not opts.config:
+        parser.error('-c option is mandatory but missing')
+
+    # ... [Previous imports and setup] ...
+
+    print("\nStarting SAGE-PSO Main Program\n")
+    print("="*60)
+
+    print(f"Checking for required SAGE output CSV files in {os.path.join(opts.outdir, 'data')}...")
+
     # --- Check for required sage_*.csv files ---
     required_csvs = [
         'sage_bhbm_all_redshifts.csv',
@@ -149,94 +219,201 @@ def main():
         'sage_smf_extra_redshifts.csv'
     ]
     data_dir = os.path.join(os.path.dirname(__file__), 'data')
+    os.makedirs(data_dir, exist_ok=True)
+    
     missing_csvs = [f for f in required_csvs if not os.path.exists(os.path.join(data_dir, f))]
+    
     if missing_csvs:
         print(f"Missing CSV files: {missing_csvs}\nRunning SAGE to generate them...")
-        # Parse OutputDir from .par file
+        
+        # 1. Parse OutputDir from .par file
         output_dir = None
-        with open(opts.config, 'r') as parfile:
-            for line in parfile:
-                if line.strip().startswith('OutputDir'):
-                    output_dir = line.split()[1].strip()
-                    break
-        if not output_dir or not os.path.isdir(output_dir):
-            raise FileNotFoundError(f"OutputDir '{output_dir}' from .par file not found.")
-        # Run SAGE using the provided binary and .par file
+        try:
+            with open(opts.config, 'r') as parfile:
+                for line in parfile:
+                    if line.strip().startswith('OutputDir'):
+                        output_dir = line.split()[1].strip()
+                        break
+        except Exception as e:
+            print(f"Error reading config file: {e}")
+            sys.exit(1)
+
+        # 2. Force Run SAGE
         import subprocess
-        sage_cmd = [opts.sage_binary, opts.config]
-        subprocess.run(sage_cmd, cwd=output_dir, check=True)
-        # Find the .hdf5 output file in output_dir
-        hdf5_file = None
-        for fname in os.listdir(output_dir):
-            if fname.endswith('.h5') or fname.endswith('.hdf5'):
-                hdf5_file = os.path.join(output_dir, fname)
-                break
-        if not hdf5_file:
-            raise FileNotFoundError("No .hdf5 output file found after running SAGE.")
-        # Extract required properties and create CSVs
-        import h5py as h5
+        import h5py
         import numpy as np
-        def read_hdf(filename, snap_num, param):
-            with h5.File(filename, 'r') as property:
-                return np.array(property[snap_num][param])
+        from scipy import stats
 
-        # Example: snapshot list and property extraction
-        # You may need to adjust snapshot numbers and property names to match your simulation
-        snapshots = list(h5.File(hdf5_file, 'r').keys())
+        if output_dir and not os.path.exists(output_dir):
+            os.makedirs(output_dir, exist_ok=True)
 
-        # --- sage_bhmf_all_redshifts.csv ---
-        if 'sage_bhmf_all_redshifts.csv' in missing_csvs:
-            with open(os.path.join(data_dir, 'sage_bhmf_all_redshifts.csv'), 'w') as f:
-                for snap in snapshots:
-                    log_mass = read_hdf(hdf5_file, snap, 'LogMass')
-                    value = read_hdf(hdf5_file, snap, 'BHMF')
-                    for m, v in zip(log_mass, value):
-                        f.write(f"{m}\t{v}\t")
-                    f.write("\n")
+        print(f"Executing SAGE: {opts.sage_binary} {opts.config}")
+        sage_cmd = [opts.sage_binary, opts.config]
+        subprocess.run(sage_cmd, cwd=opts.outdir, check=True)
 
-        # --- sage_smf_all_redshifts.csv ---
+        # 3. Find HDF5 files
+        if output_dir and os.path.exists(output_dir):
+            hdf5_files = [os.path.join(output_dir, fname) for fname in os.listdir(output_dir)
+                          if fname.startswith('model_') and fname.endswith('.hdf5')]
+        else:
+            hdf5_files = []
+        
+        if not hdf5_files:
+            raise FileNotFoundError("No model_*.hdf5 files found after SAGE run.")
+
+        # 4. Read Simulation Parameters & Detect Structure
+        print("Reading simulation parameters...")
+        with h5py.File(hdf5_files[0], 'r') as f:
+            # Detect Header
+            if 'Header' in f: header = f['Header'].attrs
+            elif 'Core_0' in f and 'Header' in f['Core_0']: header = f['Core_0']['Header'].attrs
+            else: header = {}
+
+            h = header.get('HubbleParam', opts.h0)
+            box = header.get('BoxSize', opts.boxsize)
+            n_files_total = header.get('NumFilesPerSnapshot', 1)
+            n_files_processed = len(hdf5_files)
+            vol_frac = n_files_processed / n_files_total
+            
+            # Calculate Volume (Mpc^3)
+            volume = (box / h)**3 * vol_frac
+            print(f"  Volume: {volume:.2e} Mpc^3 (h={h}, Box={box}, Frac={vol_frac:.3f})")
+
+            # Detect Structure Type
+            top_keys = list(f.keys())
+            if any(k.startswith('Core_') for k in top_keys):
+                structure_type = 'core_level'
+            elif any(k.startswith('Snap_') for k in top_keys):
+                structure_type = 'snap_level'
+            else:
+                raise ValueError("Unknown HDF5 structure")
+
+        # 5. Define Target Snapshots (z=0, 0.5, 1.0, 2.0, 3.0, 4.0)
+        # Corresponds to Millennium snapshots: 63, 48, 40, 32, 27, 23
+        target_snapshots = [63, 48, 40, 32, 27, 23]
+        print(f"Target Snapshots: {target_snapshots}")
+
+        # Initialize Data Containers
+        smf_data_columns = [] 
+        bhmf_data_columns = []
+        bhbm_data_columns = []
+        halostellar_data_columns = []
+
+        # Define Bins
+        binwidth = 0.1
+        smf_bins = np.arange(6.0, 13.0, binwidth)
+        bhmf_bins = np.arange(5.0, 11.0, binwidth)
+        bhbm_bins = np.arange(8.0, 12.5, 0.2)
+        hs_bins = np.arange(9.0, 15.0, 0.2)
+
+        # 6. Process Specific Snapshots
+        for snap_num in target_snapshots:
+            snap_key = f"Snap_{snap_num}"
+            print(f"  Processing {snap_key}...")
+            
+            g_stellar = []
+            g_bhole = []
+            g_bulge = []
+            g_mvir = []
+            
+            for file_path in hdf5_files:
+                with h5py.File(file_path, 'r') as f:
+                    def get_props(loc):
+                        s = np.array(loc['StellarMass']) * 1.0e10 / h if 'StellarMass' in loc else []
+                        bh = np.array(loc['BlackHoleMass']) * 1.0e10 / h if 'BlackHoleMass' in loc else []
+                        b = np.array(loc['BulgeMass']) * 1.0e10 / h if 'BulgeMass' in loc else []
+                        m = np.array(loc['CentralMvir']) * 1.0e10 / h if 'CentralMvir' in loc else \
+                            (np.array(loc['Mvir']) * 1.0e10 / h if 'Mvir' in loc else [])
+                        return s, bh, b, m
+
+                    if structure_type == 'core_level':
+                        for core in f.keys():
+                            if snap_key in f[core]:
+                                s, bh, b, m = get_props(f[core][snap_key])
+                                g_stellar.extend(s)
+                                g_bhole.extend(bh)
+                                g_bulge.extend(b)
+                                g_mvir.extend(m)
+                    else:
+                        if snap_key in f:
+                            s, bh, b, m = get_props(f[snap_key])
+                            g_stellar.extend(s)
+                            g_bhole.extend(bh)
+                            g_bulge.extend(b)
+                            g_mvir.extend(m)
+
+            g_stellar = np.array(g_stellar)
+            g_bhole = np.array(g_bhole)
+            g_bulge = np.array(g_bulge)
+            g_mvir = np.array(g_mvir)
+
+            # --- SMF ---
+            valid = g_stellar > 0
+            if np.sum(valid) > 0:
+                hist, edges = np.histogram(np.log10(g_stellar[valid]), bins=smf_bins)
+                phi = hist / (volume * binwidth)
+                centers = edges[:-1] + binwidth / 2
+            else:
+                centers = smf_bins[:-1] + binwidth / 2
+                phi = np.zeros_like(centers)
+            smf_data_columns.extend([centers, phi])
+
+            # --- BHMF ---
+            valid = g_bhole > 0
+            if np.sum(valid) > 0:
+                hist, edges = np.histogram(np.log10(g_bhole[valid]), bins=bhmf_bins)
+                phi = hist / (volume * binwidth)
+                centers = edges[:-1] + binwidth / 2
+            else:
+                centers = bhmf_bins[:-1] + binwidth / 2
+                phi = np.zeros_like(centers)
+            bhmf_data_columns.extend([centers, phi])
+
+            # --- BHBM ---
+            valid = (g_bulge > 0) & (g_bhole > 0)
+            if np.sum(valid) > 0:
+                x, y = np.log10(g_bulge[valid]), np.log10(g_bhole[valid])
+                mean_y, _, _ = stats.binned_statistic(x, y, 'mean', bins=bhbm_bins)
+                std_y, _, _ = stats.binned_statistic(x, y, 'std', bins=bhbm_bins)
+                count_y, edges, _ = stats.binned_statistic(x, y, 'count', bins=bhbm_bins)
+                centers = edges[:-1] + (edges[1] - edges[0])/2
+            else:
+                centers = bhbm_bins[:-1] + (bhbm_bins[1]-bhbm_bins[0])/2
+                mean_y = std_y = count_y = np.zeros_like(centers)
+            bhbm_data_columns.extend([centers, np.nan_to_num(mean_y), np.nan_to_num(std_y), count_y])
+
+            # --- Halo-Stellar ---
+            valid = (g_mvir > 0) & (g_stellar > 0)
+            if np.sum(valid) > 0:
+                x, y = np.log10(g_mvir[valid]), np.log10(g_stellar[valid])
+                mean_y, _, _ = stats.binned_statistic(x, y, 'mean', bins=hs_bins)
+                std_y, _, _ = stats.binned_statistic(x, y, 'std', bins=hs_bins)
+                count_y, edges, _ = stats.binned_statistic(x, y, 'count', bins=hs_bins)
+                centers = edges[:-1] + (edges[1] - edges[0])/2
+            else:
+                centers = hs_bins[:-1] + (hs_bins[1]-hs_bins[0])/2
+                mean_y = std_y = count_y = np.zeros_like(centers)
+            halostellar_data_columns.extend([centers, np.nan_to_num(mean_y), np.nan_to_num(std_y), count_y])
+
+        # --- Write Files ---
+        def write_wide_csv(filename, columns):
+            if not columns: return
+            path = os.path.join(data_dir, filename)
+            data_matrix = np.column_stack(columns)
+            np.savetxt(path, data_matrix, delimiter='\t', fmt='%.6e')
+            print(f"Generated {path}")
+
         if 'sage_smf_all_redshifts.csv' in missing_csvs:
-            with open(os.path.join(data_dir, 'sage_smf_all_redshifts.csv'), 'w') as f:
-                for snap in snapshots:
-                    log_mass = read_hdf(hdf5_file, snap, 'LogMass')
-                    value = read_hdf(hdf5_file, snap, 'SMF')
-                    for m, v in zip(log_mass, value):
-                        f.write(f"{m}\t{v}\t")
-                    f.write("\n")
-
-        # --- sage_smf_extra_redshifts.csv ---
+            write_wide_csv('sage_smf_all_redshifts.csv', smf_data_columns)
         if 'sage_smf_extra_redshifts.csv' in missing_csvs:
-            with open(os.path.join(data_dir, 'sage_smf_extra_redshifts.csv'), 'w') as f:
-                for snap in snapshots:
-                    log_mass = read_hdf(hdf5_file, snap, 'LogMass')
-                    value = read_hdf(hdf5_file, snap, 'SMF_extra')
-                    for m, v in zip(log_mass, value):
-                        f.write(f"{m}\t{v}\t")
-                    f.write("\n")
-
-        # --- sage_bhbm_all_redshifts.csv ---
+            write_wide_csv('sage_smf_extra_redshifts.csv', smf_data_columns)
+        if 'sage_bhmf_all_redshifts.csv' in missing_csvs:
+            write_wide_csv('sage_bhmf_all_redshifts.csv', bhmf_data_columns)
         if 'sage_bhbm_all_redshifts.csv' in missing_csvs:
-            with open(os.path.join(data_dir, 'sage_bhbm_all_redshifts.csv'), 'w') as f:
-                for snap in snapshots:
-                    # Example: extract multiple properties per bin
-                    # You may need to adjust property names and grouping
-                    props = ['LogMass', 'LogBHM', 'Error', 'Count']
-                    arrays = [read_hdf(hdf5_file, snap, p) for p in props]
-                    for row in zip(*arrays):
-                        f.write("\t".join(str(x) for x in row) + "\t")
-                    f.write("\n")
-
-        # --- sage_halostellar_all_redshifts.csv ---
+            write_wide_csv('sage_bhbm_all_redshifts.csv', bhbm_data_columns)
         if 'sage_halostellar_all_redshifts.csv' in missing_csvs:
-            with open(os.path.join(data_dir, 'sage_halostellar_all_redshifts.csv'), 'w') as f:
-                for snap in snapshots:
-                    props = ['LogHaloMass', 'LogStellarMass', 'Error', 'Count']
-                    arrays = [read_hdf(hdf5_file, snap, p) for p in props]
-                    for row in zip(*arrays):
-                        f.write("\t".join(str(x) for x in row) + "\t")
-                    f.write("\n")
+            write_wide_csv('sage_halostellar_all_redshifts.csv', halostellar_data_columns)
 
-        print(f"Generated missing CSV files: {missing_csvs}")
 
 ### HEAVILY modified to be SAGE specific
     parser = argparse.ArgumentParser()
