@@ -483,116 +483,96 @@ def create_combined_constraint_grids(output_dir='parameter_plots', png_dir=None)
 
 def create_parameter_gif(param_matrix, param_names, output_path, scores=None, particles=None):
     from mpl_toolkits.mplot3d import Axes3D
-    # param_matrix shape: (iterations, particles, n_params)
-    # If param_matrix is 2D, try to reshape
-    def _infer_particles(param_matrix, particles=None):
-        if particles is not None:
-            if param_matrix.shape[0] % particles == 0:
-                iterations = param_matrix.shape[0] // particles
-                return iterations, particles
-            else:
-                logger.error(f"Provided particles ({particles}) does not divide param_matrix rows ({param_matrix.shape[0]}).")
-                return None, None
-        return param_matrix.shape[0], 1
-
-    n_params = param_matrix.shape[-1]
-    logger.info(f"create_parameter_gif: param_matrix shape: {param_matrix.shape}")
-    if scores is not None:
-        logger.info(f"create_parameter_gif: scores shape: {scores.shape}")
-    if n_params < 3:
-        logger.warning("Not enough parameters for GIF animation.")
-        return
-    if param_matrix.ndim == 2:
-        iterations, particles = _infer_particles(param_matrix, particles)
-        if iterations is None or particles is None:
-            logger.error("Could not infer iterations and particles; cannot animate swarm.")
-            return
-        try:
-            param_matrix = param_matrix.reshape((iterations, particles, n_params))
-        except Exception as e:
-            logger.error(f"Could not reshape param_matrix: {e}")
-            return
-    elif param_matrix.ndim == 3:
-        iterations, particles, n_params = param_matrix.shape
-    else:
-        logger.error(f"param_matrix has unexpected number of dimensions: {param_matrix.ndim}")
-        return
+    
+    # Ensure 3D shape: (Iterations, Particles, Params)
+    if param_matrix.ndim == 2 and particles is not None:
+        iterations = param_matrix.shape[0] // particles
+        n_params = param_matrix.shape[1]
+        param_matrix = param_matrix.reshape((iterations, particles, n_params))
+    
+    iterations, n_particles, n_params = param_matrix.shape
+    
     fig = plt.figure()
-    ax = fig.add_subplot(111, projection='3d')
+    
+    # Check if we have enough parameters for 3D
+    is_3d = n_params >= 3
+    if is_3d:
+        ax = fig.add_subplot(111, projection='3d')
+    else:
+        ax = fig.add_subplot(111)
+
     def update(i):
         ax.clear()
         xs = param_matrix[i, :, 0]
         ys = param_matrix[i, :, 1]
-        zs = param_matrix[i, :, 2]
-        if scores is not None and hasattr(scores, 'shape') and scores.shape[0] > i:
-            cs = scores[i]
-            sc = ax.scatter(xs, ys, zs, c=cs, cmap='plasma', alpha=0.7)
-            fig.colorbar(sc, ax=ax, shrink=0.5, aspect=5, label='Fitness')
+        
+        # Handle Scores (Color)
+        if scores is not None:
+            # scores should be (Iterations, Particles)
+            cs = scores[i] if scores.ndim == 2 else scores
+            
+            if is_3d:
+                zs = param_matrix[i, :, 2]
+                sc = ax.scatter(xs, ys, zs, c=cs, cmap='plasma', alpha=0.7)
+                ax.set_zlabel(param_names[2])
+            else:
+                sc = ax.scatter(xs, ys, c=cs, cmap='plasma', alpha=0.7)
         else:
-            sc = ax.scatter(xs, ys, zs, color='b', alpha=0.7)
+            if is_3d:
+                zs = param_matrix[i, :, 2]
+                ax.scatter(xs, ys, zs, color='b', alpha=0.7)
+                ax.set_zlabel(param_names[2])
+            else:
+                ax.scatter(xs, ys, color='b', alpha=0.7)
+
         ax.set_xlabel(param_names[0])
         ax.set_ylabel(param_names[1])
-        ax.set_zlabel(param_names[2])
+        ax.set_title(f"Iteration {i}")
+
+    # Use Pillow writer to avoid ImageMagick dependency
     ani = anim.FuncAnimation(fig, update, frames=iterations, repeat=False)
-    ani.save(output_path, writer='imagemagick')
-        
-    # logger.info(f"Created combined {plot_type} grid figure")
+    ani.save(output_path, writer='pillow', fps=2)
 
 def load_sage_data():
-    """Load SMF data from SAGE-miniUchuu"""
-    # Load main SAGE data
-    sage_data = load_observation('data/sage_smf_all_redshifts.csv', cols=[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,
-                                                              15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31])
+    """Load SMF data from SAGE (Matched to main.py output)"""
+    # We have 6 snapshots (z=0, 0.5, 1.0, 2.0, 3.0, 4.0) -> 12 Columns
+    sage_data = load_observation('data/sage_smf_all_redshifts.csv', cols=list(range(12)))
     
-    # Load z=1.0 data from the separate file
-    sage_z1_data = load_observation('data/sage_smf_extra_redshifts.csv', cols=[4,5])
-    
-    # Dictionary to store data for each redshift
     data_by_z = {}
     
-    # List of redshifts and their corresponding column indices
-    redshifts = [0.0, 0.2, 0.5, 0.8, 1.0, 1.1, 1.5, 2.0, 2.4, 3.1, 3.6, 4.6, 5.7, 6.3, 7.7, 8.5, 10.4]
+    # These must match the 'target_snapshots' order in main.py
+    # Snaps: 63, 48, 40, 32, 27, 23
+    redshifts = [0.0, 0.5, 1.0, 2.0, 3.0, 4.0]
     
-    # Column indices for main SAGE data
-    col_indices = [(0,1), (2,3), (4,5), (6,7), None, (8,9), (10,11), (12,13), (14,15), 
-                   (16,17), (18,19), (20,21), (22,23), (24,25), (26,27), (28,29), (30,31)]
+    # Column indices pairs (Mass, Phi) for each redshift
+    col_indices = [(0,1), (2,3), (4,5), (6,7), (8,9), (10,11)]
     
-    # Process data for each redshift
-    for z, indices in zip(redshifts, col_indices):
-        if z == 1.0:
-            # Handle z=1.0 data from separate file
-            logm = sage_z1_data[0]
-            logphi = sage_z1_data[1]
-        else:
-            # Handle data from main SAGE file
-            mass_idx, phi_idx = indices
-            logm = sage_data[mass_idx]
-            logphi = sage_data[phi_idx]
-        
-        valid_mask = ~np.isnan(logm) & ~np.isnan(logphi)
-        data_by_z[z] = (logm[valid_mask], logphi[valid_mask], f'SAGE (miniuchuu) (z={z})')
-    
-    return data_by_z
-
-def load_sage_data_forBHMF():
-    """Load BHMF data from SAGE-miniUchuu"""
-    sage_data = load_observation('data/sage_bhmf_all_redshifts.csv', cols=[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,
-                                                              15,16,17,18,19])
-    # Dictionary to store data for each redshift
-    data_by_z = {}
-    
-    # List of redshifts and their corresponding column indices
-    redshifts = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0]
-    col_indices = [(0,1), (2,3), (4,5), (6,7), (8,9), (10,11), (12,13), (14,15), 
-                   (16,17), (18,19)]
-    
-    # Process data for each redshift
     for z, (mass_idx, phi_idx) in zip(redshifts, col_indices):
         logm = sage_data[mass_idx]
         logphi = sage_data[phi_idx]
+        
         valid_mask = ~np.isnan(logm) & ~np.isnan(logphi)
-        data_by_z[z] = (logm[valid_mask], logphi[valid_mask], f'SAGE (miniuchuu) (z={z})')
+        data_by_z[z] = (logm[valid_mask], logphi[valid_mask], f'SAGE (z={z})')
+        
+    return data_by_z
+
+def load_sage_data_forBHMF():
+    """Load BHMF data from SAGE (Matched to main.py output)"""
+    # We have 6 snapshots (z=0, 0.5, 1.0, 2.0, 3.0, 4.0) -> 12 Columns
+    sage_data = load_observation('data/sage_bhmf_all_redshifts.csv', cols=list(range(12)))
     
+    data_by_z = {}
+    
+    redshifts = [0.0, 0.5, 1.0, 2.0, 3.0, 4.0]
+    col_indices = [(0,1), (2,3), (4,5), (6,7), (8,9), (10,11)]
+    
+    for z, (mass_idx, phi_idx) in zip(redshifts, col_indices):
+        logm = sage_data[mass_idx]
+        logphi = sage_data[phi_idx]
+        
+        valid_mask = ~np.isnan(logm) & ~np.isnan(logphi)
+        data_by_z[z] = (logm[valid_mask], logphi[valid_mask], f'SAGE (z={z})')
+        
     return data_by_z
 
 def load_sage_data_forHSMR():
@@ -611,7 +591,7 @@ def load_sage_data_forHSMR():
         logm = sage_data[mass_idx]
         logphi = sage_data[phi_idx]
         valid_mask = ~np.isnan(logm) & ~np.isnan(logphi)
-        data_by_z[z] = (logm[valid_mask], logphi[valid_mask], f'SAGE (miniuchuu) (z={z})')
+        data_by_z[z] = (logm[valid_mask], logphi[valid_mask], f'SAGE (z={z})')
     
     return data_by_z
 
@@ -624,14 +604,14 @@ def load_bhbm_data():
     log_bulgemass = bulgemass
     
     # Load SAGE data
-    sage_bhbm_data = load_observation('data/sage_bhbm_all_redshifts.csv', cols=[0,1,2,3,4,5,6,7,8,9,10,11,12,13])
+    sage_bhbm_data = load_observation('data/sage_bhbm_all_redshifts.csv', cols=[0,1,2,3,4,5,6,7,8,9,10,11])
     
     # Dictionary to store data for each redshift
     data_by_z = {}
     
     # List of redshifts and their corresponding column indices
-    redshifts = [0.0, 2.0]
-    col_indices = [(0,1), (12,13)]
+    redshifts = [0.0]
+    col_indices = [(0,1)]
     
     # Process data for each redshift
     for z, (mass_idx, bh_idx) in zip(redshifts, col_indices):
@@ -643,13 +623,13 @@ def load_bhbm_data():
             # For z=0, include both observational and SAGE data
             data_by_z[z] = (
                 (log_bulgemass, log_blackholemass, 'Haring & Rix 2004'),
-                (logm_sage[valid_mask], logbh_sage[valid_mask], f'SAGE (miniuchuu) (z={z})')
+                (logm_sage[valid_mask], logbh_sage[valid_mask], f'SAGE (z={z})')
             )
         else:
             # For other redshifts, only SAGE data
             data_by_z[z] = (
                 (bulgemass_z2, blackholemass_z2, 'Zhang et al. 2023'),
-                (logm_sage[valid_mask], logbh_sage[valid_mask], f'SAGE (miniuchuu) (z={z})')
+                (logm_sage[valid_mask], logbh_sage[valid_mask], f'SAGE (z={z})')
             )
     
     return data_by_z
@@ -1274,12 +1254,24 @@ def create_swarm_gif_from_tracks(tracks_dir, space_file, output_path):
     Loads positions and fitness from tracks files and creates swarm GIF.
     """
     space, pos, fx = load_space_and_particles(tracks_dir, space_file)
-    # pos: (S, D, L) -> (S, L, D) (should be (iterations, particles, parameters))
-    pos = pos.transpose(0, 2, 1)  # (S, D, L) -> (S, L, D)
-    # fx: (S, L)
-    param_names = list(space['plot_label']) if 'plot_label' in space else [f'param{i}' for i in range(pos.shape[2])]
-    create_parameter_gif(pos, param_names, output_path, scores=fx, particles=pos.shape[1])
+    
+    # Input pos is (S, D, L) -> (Particles, Dimensions, Iterations)
+    # We want (L, S, D) -> (Iterations, Particles, Dimensions) for the animation
+    pos = pos.transpose(2, 0, 1)
+    
+    # fx is (S, L) -> (Particles, Iterations)
+    # We want (L, S) -> (Iterations, Particles) to match the frames
+    fx = fx.T
 
+    # FIX: Check dtype.names to avoid "structured array" comparison error
+    if space.dtype.names and 'plot_label' in space.dtype.names:
+        param_names = list(space['plot_label'])
+    else:
+        param_names = [f'param{i}' for i in range(pos.shape[2])]
+
+    # Pass the corrected data to the generator
+    # pos.shape[1] is now 'Particles' (S)
+    create_parameter_gif(pos, param_names, output_path, scores=fx, particles=pos.shape[1])
 def main(tracks_dir, space_file, output_dir, config_opts, space=None):
     
     processing(tracks_dir, space_file, output_dir, config_opts, space=space)
