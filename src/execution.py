@@ -6,9 +6,7 @@ import os
 import shutil
 import subprocess
 import time
-
 import numpy as np # type: ignore
-
 from src import common
 
 

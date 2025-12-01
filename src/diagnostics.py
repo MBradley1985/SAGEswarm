@@ -5,6 +5,7 @@ This script produces the diagnostic plots used to help visualise the PSO process
 One is a 3D representation of the swarm movement in the parameter space the other
 is the Log Liklihood over iteration for each particle
 """
+
 import warnings
 warnings.filterwarnings("ignore")
 import argparse
