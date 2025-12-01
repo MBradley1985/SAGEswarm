@@ -1,4 +1,4 @@
-# SAGE-OPTIM: Semi-Analytic Galaxy Evolution Model Particle Swarm Optimization Package
+# SAGE-PSO: Semi-Analytic Galaxy Evolution Model Particle Swarm Optimization Package
 
 A robust, modular Python package for PSO-based parameter optimization and analysis in galaxy evolution modeling using the SAGE semi-analytic model.
 
