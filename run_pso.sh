@@ -8,8 +8,8 @@
 CONFIG_PATH="../../SAGE-2.0/sage-model/input/millennium.par"
 BASE_PATH="../../SAGE-2.0/sage-model/sage"
 OUTPUT_PATH="../../SAGE-2.0/sage-model/output/millennium_pso"
-PARTICLES=8
-ITERATIONS=3
+PARTICLES=16
+ITERATIONS=10
 TEST="chi2"
 CONSTRAINTS="SMF_z0,BHMF_z0,BHBM,CSFRDH"
 AGE_ALIST_FILE_MINI_UCHUU='/fred/oz004/msinha/simulations/uchuu_suite/miniuchuu/mergertrees/u400_planck2016_50.a_list'
