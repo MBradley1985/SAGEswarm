@@ -9,7 +9,7 @@ import time
 
 import numpy as np # type: ignore
 
-import common
+from src import common
 
 
 logger = logging.getLogger(__name__)

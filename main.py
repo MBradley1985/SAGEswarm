@@ -11,16 +11,13 @@ import time
 def _abspath(p):
     return os.path.normpath(os.path.abspath(p))
 
-
-
-
-import analysis
-import common
-import constraints
-import execution
-import pso
+from src import analysis
+from src import common
+from src import constraints
+from src import execution
+from src import pso
 import glob
-import diagnostics
+from src import diagnostics
 
 
 logger = logging.getLogger('main')
@@ -434,73 +431,8 @@ def main():
         if 'sage_halostellar_all_redshifts.csv' in missing_csvs:
             write_wide_csv('sage_halostellar_all_redshifts.csv', halostellar_data_columns)
 
-
-### HEAVILY modified to be SAGE specific
-#     parser = argparse.ArgumentParser()
-#     parser.add_argument('-c', '--config', required=True, help='Configuration (.par) file for SAGE input', type=_abspath)
-#     parser.add_argument('-v', '--subvolumes', help='Comma- and dash-separated list of subvolumes to process', default='0')
-#     parser.add_argument('-b', '--sage-binary', required=True, help='Path to the SAGE binary to use', type=_abspath)
-#     parser.add_argument('-o', '--outdir', help='Auxiliary output directory, defaults to .', default=_abspath('.'),
-#                         type=_abspath)
-#     parser.add_argument('-k', '--keep', help='Keep temporary output files', action='store_true')
-#     parser.add_argument('-sn', '--snapshot', help='Comma-separated list of snapshot numbers to analyze', 
-#                    type=lambda x: [int(i) for i in x.split(',')], default=None)
-#     parser.add_argument('--sim', help='Simulation to use (0=miniUchuu, 1=miniMillennium, 2=MTNG)', 
-#                    type=int, default=0)
-#     parser.add_argument('--boxsize', help='Size of the simulation box in Mpc/h', 
-#                     type=float, default=400.0)
-#     parser.add_argument('--vol-frac', help='Volume fraction of the simulation box', 
-#                     type=float, default=0.0019)
-#     parser.add_argument('--age-alist-file', help='Path to the age list file, match with .par file',
-#                    default=None, type=_abspath)
-#     parser.add_argument('--Omega0', help='Omega0 value for the simulation', 
-#                     type=float, default=0.3089)
-#     parser.add_argument('--h0', help='H0 value for the simulation', 
-#                     type=float, default=0.677400)
-# ###
-
-#     pso_opts = parser.add_argument_group('PSO options')
-#     pso_opts.add_argument('-s', '--swarm-size', help='Size of the particle swarm. Defaults to 10 + sqrt(D) * 2 (D=number of dimensions)',
-#                           type=int, default=None)
-#     pso_opts.add_argument('-m', '--max-iterations', help='Maximum number of iterations to reach before giving up, defaults to 20',
-#                           default=10, type=int)
-#     pso_opts.add_argument('-S', '--space-file', help='File with the search space specification, defaults to space.txt',
-#                           default='space.txt', type=_abspath)
-#     pso_opts.add_argument('-t', '--stat-test', help='Stat function used to calculate the value of a particle, defaults to student-t',
-#                           default='student-t', choices=list(analysis.stat_tests.keys()))
-#     pso_opts.add_argument('-x', '--constraints', default='BHMF,SMF_z0,BHBM',
-#                           help=("Comma-separated list of constraints, any of BHMF, SMF_z0 or BHBM, defaults to 'BHMF,SMF_z0,BHBM'. "
-#                                 "Can specify a domain range after the name (e.g., 'SMF_z0(8-11)')"
-#                                 "and/or a relative weight (e.g. 'BHMF*6,SMF_z0(8-11)*10)'"))
-#     pso_opts.add_argument('-csv', '--csv-output', help='Path to save PSO results as CSV file. If not specified, no CSV will be generated.',
-#                       type=_abspath, default=None)
-#     pso_opts.add_argument('-r', '--random-seed', help='Random seed for reproducibility. If not specified, PSO will use random initialization.',
-#                       type=int, default=None)
-#     pso_opts.add_argument('--omega', help='PSO inertia weight (default: 0.729). Standard constriction coefficient from Clerc & Kennedy (2002).',
-#                       type=float, default=0.729)
-#     pso_opts.add_argument('--phip', help='PSO cognitive parameter (default: 1.49445). Particle learning from own best. Standard value ~1.5-2.0.',
-#                       type=float, default=1.49445)
-#     pso_opts.add_argument('--phig', help='PSO social parameter (default: 1.49445). Particle learning from swarm best. Standard value ~1.5-2.0.',
-#                       type=float, default=1.49445)
-
-# ### 
-#     hpc_opts = parser.add_argument_group('HPC options')
-#     hpc_opts.add_argument('-H', '--hpc-mode', help='Enable HPC mode', action='store_true')
-#     hpc_opts.add_argument('-C', '--cpus', help='Number of CPUs per sage instance', default=1, type=int)
-#     hpc_opts.add_argument('-M', '--memory', help='Memory needed by each sage instance', default='1500m')
-#     hpc_opts.add_argument('-N', '--nodes', help='Number of nodes to use', default=None, type=int)
-#     hpc_opts.add_argument('-a', '--account', help='Submit jobs using this account', default=None)
-#     hpc_opts.add_argument('-q', '--queue', help='Submit jobs to this queue', default=None)
-#     hpc_opts.add_argument('-w', '--walltime', help='Walltime for each submission, defaults to 1:00:00', default='1:00:00')
-#     hpc_opts.add_argument('-u', '--username', help='Username for SLURM job submission', default=None)
-###
-
-    # opts = parser.parse_args()
-
-    # if not opts.config:
-    #     parser.error('-c option is mandatory but missing')
-
-    if opts.snapshot:
+    # Determine snapshots needed for constraints
+    if opts.snapshot is not None:
         snapshots = opts.snapshot
     else:
         snapshots = get_required_snapshots(opts.constraints)
@@ -525,13 +457,7 @@ def main():
                                     age_alist_file=opts.age_alist_file,
                                     Omega0=opts.Omega0, h0=opts.h0,
                                     output_dir=opts.outdir)
-#    for c in opts.constraints:
-#        c.redshift_table = redshift_table
-
-    # Read search space specification, which is a comma-separated multiline file,
-    # each line containing the following elements:
-    #
-    # param_name, plot_label, is_log, lower_bound, upper_bound
+    # Load the search space
     space = analysis.load_space(opts.space_file)
 
     ss = opts.swarm_size
@@ -543,10 +469,6 @@ def main():
     if opts.hpc_mode:
         procs = 0
         f = execution.run_sage_hpc
-#    else:
-#        n_cpus = multiprocessing.cpu_count()
-#        procs = min(n_cpus, ss)
-#        f = execution.run_shark
     else:
         n_cpus = multiprocessing.cpu_count()
         print('seeing', n_cpus, 'CPUs')
@@ -580,12 +502,15 @@ def main():
     logger.info('    Lower bounds: %r', space['lb'])
     logger.info('    Upper bounds: %r', space['ub'])
     logger.info('    Test function: %s', opts.stat_test)
+
     logger.info('Constraints:')
     for c in opts.constraints:
         logger.info('    %s', c)
+
     logger.info('    CSV Output Path: %s', opts.csv_output if opts.csv_output else 'Not specified')
     logger.info('    Random Seed: %s', opts.random_seed if opts.random_seed is not None else 'Not specified (random initialization)')
     logger.info('HPC mode: %d', opts.hpc_mode)
+
     if opts.hpc_mode:
         logger.info('    Account used to submit: %s', opts.account if opts.account else '')
         logger.info('    Queue to submit: %s', opts.queue if opts.queue else '')
@@ -594,18 +519,9 @@ def main():
         logger.info('    Memory per instance: %s', opts.memory)
         logger.info('    Nodes to use: %s', opts.nodes)
         logger.info('    Username to use: %s', opts.username if opts.username else '')
-    """
-    raw_input = input
-    while True:
-        answer = raw_input('\nAre these parameters correct? (Yes/no): ')
-        if answer:
-            if answer.lower() in ('n', 'no'):
-                logger.info('Not starting PSO, check your configuration and try again')
-                return
-            print("Please answer 'yes' or 'no'")
-            continue
-        break
-    """
+    logger.info('-----------------------------------------------------')
+
+    
     # Directory where we store the intermediate results
     tracksdir = os.path.join(opts.outdir, 'tracks')
     try:
