@@ -1,4 +1,5 @@
-# redshift_utils.py
+#!/bin/bash
+
 def get_redshift_info(z=None, z_str=None, filename=None):
     """
     Universal redshift conversion function. Provide one of:

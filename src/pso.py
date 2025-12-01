@@ -1,3 +1,5 @@
+#!/bin/bash
+
 # Adapted from pyswarm verison 0.7 for optimising the shark SAM on a HPC system
 #
 # https://github.com/tisimst/pyswarm/tree/master/pyswarm   (original pyswarms code)
