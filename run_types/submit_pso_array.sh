@@ -15,7 +15,7 @@ echo "Job array submitted: $JOB_ID"
 echo ""
 
 # Construct output directory name
-OUTPUT_DIR="/fred/oz004/mbradley/SAGE-GAS/sage-model/output/millennium_pso_multi_slurm_${JOB_ID}"
+OUTPUT_DIR="../../SAGE-2.0/sage-model/output/millennium_pso_multi_slurm_${JOB_ID}"
 
 echo "Submitting analysis job (will run after array completes)..."
 ANALYSIS_OUTPUT=$(sbatch --dependency=afterany:${JOB_ID} analyze_pso_array.sh "$OUTPUT_DIR")

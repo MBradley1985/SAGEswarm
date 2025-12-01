@@ -1,12 +1,12 @@
 #!/bin/bash
 
 # Define paths to different PSO run outputs
-BASE_OUTPUT_DIR="/fred/oz004/mbradley/sage-model/output"
+BASE_OUTPUT_DIR="../../SAGE-2.0/sage-model/output"
 #RUN1_DIR="/fred/oz004/mbradley/sage-model/output/miniuchuu_pso_1tree_1cpu"
-RUN2_DIR="/fred/oz004/mbradley/sage-model/output/pso_tolerance05/miniuchuu_pso_1tree_1cpu"
+RUN2_DIR="../../SAGE-2.0/sage-model/output/pso_tolerance05/miniuchuu_pso_1tree_1cpu"
 #RUN3_DIR="/fred/oz004/mbradley/sage-model/output/miniuchuu_pso_8tree_64cpu"
-RUN4_DIR="/fred/oz004/mbradley/sage-model/output/pso_tolerance05/miniuchuu_pso_4tree_32cpu"
-RUN5_DIR="/fred/oz004/mbradley/sage-model/output/pso_tolerance05/miniuchuu_pso_32tree_32cpu"
+RUN4_DIR="../../SAGE-2.0/sage-model/output/pso_tolerance05/miniuchuu_pso_4tree_32cpu"
+RUN5_DIR="../../SAGE-2.0/sage-model/output/pso_tolerance05/miniuchuu_pso_32tree_32cpu"
 
 # Create output directory if it doesn't exist
 #mkdir -p "$BASE_OUTPUT_DIR"

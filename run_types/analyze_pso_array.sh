@@ -3,7 +3,6 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=4GB
 #SBATCH --time=00:30:00
-#SBATCH --account=oz004
 
 # Script to analyze results from a completed PSO job array
 # Usage: sbatch --dependency=afterany:<array_job_id> analyze_pso_array.sh <output_dir>
@@ -15,12 +14,10 @@ if [ $# -lt 1 ]; then
 fi
 
 MULTI_RUN_DIR=$1
-SPACEFILE="/fred/oz004/mbradley/SAGE-GAS/sage-model/optim/space.txt"
+SPACEFILE="./space.txt"
 
 ml purge
 ml restore basic
-
-cd /fred/oz004/mbradley/SAGE-GAS/sage-model/optim || exit 1
 
 echo "========================================="
 echo "Analyzing PSO Array Results"

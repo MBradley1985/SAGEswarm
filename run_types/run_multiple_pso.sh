@@ -19,7 +19,7 @@ NUM_RUNS=$1
 CONSTRAINTS=$2
 
 # Base directory for storing results
-BASE_OUTPUT_DIR="/Users/mbradley/Documents/PhD/SAGE-2.0/sage-model/output/millennium_pso_multi"
+BASE_OUTPUT_DIR="../../SAGE-2.0/sage-model/output/millennium_pso_multi"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 MULTI_RUN_DIR="${BASE_OUTPUT_DIR}_${TIMESTAMP}"
 

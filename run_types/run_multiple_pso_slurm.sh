@@ -28,22 +28,22 @@ else
 fi
 
 # Base directory for storing results (shared across all array jobs)
-BASE_OUTPUT_DIR="/fred/oz004/mbradley/SAGE-GAS/sage-model/output/millennium_pso_multi"
+BASE_OUTPUT_DIR="../sage-model/output/millennium_pso_multi"
 MULTI_RUN_DIR="${BASE_OUTPUT_DIR}_slurm_${SLURM_ARRAY_JOB_ID}"
 
 # Fixed parameters
-CONFIG_PATH="/fred/oz004/mbradley/SAGE-GAS/sage-model/input/minimillennium.par"
-BASE_PATH="/fred/oz004/mbradley/SAGE-GAS/sage-model/sage"
+CONFIG_PATH="../../SAGE-2.0/sage-model/input/minimillennium.par"
+BASE_PATH="../../SAGE-2.0/sage-model/sage"
 PARTICLES=13
 ITERATIONS=50
 TEST="student-t"
-AGE_ALIST_FILE_MINI_MILLENNIUM="/fred/oz004/mbradley/SAGE-GAS/sage-model/input/millennium/trees/millennium.a_list"
+AGE_ALIST_FILE_MINI_MILLENNIUM="../../SAGE-2.0/sage-model/input/millennium/trees/millennium.a_list"
 BOXSIZE=62.5
 SIM_MINI_MILLENNIUM=1
 VOL_FRAC=1.0
 OMEGA0=0.25 
 H0=0.73
-SPACEFILE="/fred/oz004/mbradley/SAGE-GAS/sage-model/optim/space.txt"
+SPACEFILE="./space.txt"
 ACCOUNT="oz004"
 
 # Create main directory (first task creates it, others wait)
