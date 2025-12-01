@@ -224,7 +224,7 @@ def main():
     missing_csvs = [f for f in required_csvs if not os.path.exists(os.path.join(data_dir, f))]
     
     if missing_csvs:
-        print(f"Missing CSV files: {missing_csvs}\nRunning SAGE to generate them...")
+        print(f"Missing CSV files: {missing_csvs}\nChecking for existing SAGE output...")
         
         # 1. Parse OutputDir from .par file
         output_dir = None
@@ -237,29 +237,38 @@ def main():
         except Exception as e:
             print(f"Error reading config file: {e}")
             sys.exit(1)
-
-        # 2. Force Run SAGE
+            
+        # 2. Check for existing HDF5 files
         import subprocess
         import h5py
         import numpy as np
         from scipy import stats
 
-        if output_dir and not os.path.exists(output_dir):
-            os.makedirs(output_dir, exist_ok=True)
-
-        print(f"Executing SAGE: {opts.sage_binary} {opts.config}")
-        sage_cmd = [opts.sage_binary, opts.config]
-        subprocess.run(sage_cmd, cwd=opts.outdir, check=True)
-
-        # 3. Find HDF5 files
+        hdf5_files = []
         if output_dir and os.path.exists(output_dir):
             hdf5_files = [os.path.join(output_dir, fname) for fname in os.listdir(output_dir)
                           if fname.startswith('model_') and fname.endswith('.hdf5')]
+
+        # 3. Run SAGE only if HDF5 files are missing
+        if hdf5_files:
+            print(f"Found {len(hdf5_files)} existing HDF5 files in '{output_dir}'. Skipping SAGE binary run.")
         else:
-            hdf5_files = []
+            print(f"No existing HDF5 files found. Running SAGE to generate them...")
+            
+            if output_dir and not os.path.exists(output_dir):
+                os.makedirs(output_dir, exist_ok=True)
+
+            print(f"Executing SAGE: {opts.sage_binary} {opts.config}")
+            sage_cmd = [opts.sage_binary, opts.config]
+            subprocess.run(sage_cmd, cwd=opts.outdir, check=True)
+            
+            # Find the newly generated files
+            if output_dir and os.path.exists(output_dir):
+                hdf5_files = [os.path.join(output_dir, fname) for fname in os.listdir(output_dir)
+                              if fname.startswith('model_') and fname.endswith('.hdf5')]
         
         if not hdf5_files:
-            raise FileNotFoundError("No model_*.hdf5 files found after SAGE run.")
+            raise FileNotFoundError("No model_*.hdf5 files found (even after attempting SAGE run).")
 
         # 4. Read Simulation Parameters & Detect Structure
         print("Reading simulation parameters...")
@@ -353,6 +362,8 @@ def main():
                 hist, edges = np.histogram(np.log10(g_stellar[valid]), bins=smf_bins)
                 phi = hist / (volume * binwidth)
                 centers = edges[:-1] + binwidth / 2
+                # Replace Zeros with NaN
+                phi[phi == 0] = np.nan
             else:
                 centers = smf_bins[:-1] + binwidth / 2
                 phi = np.zeros_like(centers)
@@ -364,6 +375,8 @@ def main():
                 hist, edges = np.histogram(np.log10(g_bhole[valid]), bins=bhmf_bins)
                 phi = hist / (volume * binwidth)
                 centers = edges[:-1] + binwidth / 2
+                # Replace Zeros with NaN
+                phi[phi == 0] = np.nan
             else:
                 centers = bhmf_bins[:-1] + binwidth / 2
                 phi = np.zeros_like(centers)
@@ -377,10 +390,14 @@ def main():
                 std_y, _, _ = stats.binned_statistic(x, y, 'std', bins=bhbm_bins)
                 count_y, edges, _ = stats.binned_statistic(x, y, 'count', bins=bhbm_bins)
                 centers = edges[:-1] + (edges[1] - edges[0])/2
+
             else:
                 centers = bhbm_bins[:-1] + (bhbm_bins[1]-bhbm_bins[0])/2
-                mean_y = std_y = count_y = np.zeros_like(centers)
-            bhbm_data_columns.extend([centers, np.nan_to_num(mean_y), np.nan_to_num(std_y), count_y])
+                mean_y = np.full_like(centers, np.nan)
+                std_y = np.full_like(centers, np.nan)
+                count_y = np.zeros_like(centers)
+
+            bhbm_data_columns.extend([centers, mean_y, std_y, count_y])
 
             # --- Halo-Stellar ---
             valid = (g_mvir > 0) & (g_stellar > 0)
@@ -392,8 +409,11 @@ def main():
                 centers = edges[:-1] + (edges[1] - edges[0])/2
             else:
                 centers = hs_bins[:-1] + (hs_bins[1]-hs_bins[0])/2
-                mean_y = std_y = count_y = np.zeros_like(centers)
-            halostellar_data_columns.extend([centers, np.nan_to_num(mean_y), np.nan_to_num(std_y), count_y])
+                mean_y = np.full_like(centers, np.nan)
+                std_y = np.full_like(centers, np.nan)
+                count_y = np.zeros_like(centers)
+
+            halostellar_data_columns.extend([centers, mean_y, std_y, count_y])
 
         # --- Write Files ---
         def write_wide_csv(filename, columns):
@@ -416,69 +436,69 @@ def main():
 
 
 ### HEAVILY modified to be SAGE specific
-    parser = argparse.ArgumentParser()
-    parser.add_argument('-c', '--config', required=True, help='Configuration (.par) file for SAGE input', type=_abspath)
-    parser.add_argument('-v', '--subvolumes', help='Comma- and dash-separated list of subvolumes to process', default='0')
-    parser.add_argument('-b', '--sage-binary', required=True, help='Path to the SAGE binary to use', type=_abspath)
-    parser.add_argument('-o', '--outdir', help='Auxiliary output directory, defaults to .', default=_abspath('.'),
-                        type=_abspath)
-    parser.add_argument('-k', '--keep', help='Keep temporary output files', action='store_true')
-    parser.add_argument('-sn', '--snapshot', help='Comma-separated list of snapshot numbers to analyze', 
-                   type=lambda x: [int(i) for i in x.split(',')], default=None)
-    parser.add_argument('--sim', help='Simulation to use (0=miniUchuu, 1=miniMillennium, 2=MTNG)', 
-                   type=int, default=0)
-    parser.add_argument('--boxsize', help='Size of the simulation box in Mpc/h', 
-                    type=float, default=400.0)
-    parser.add_argument('--vol-frac', help='Volume fraction of the simulation box', 
-                    type=float, default=0.0019)
-    parser.add_argument('--age-alist-file', help='Path to the age list file, match with .par file',
-                   default=None, type=_abspath)
-    parser.add_argument('--Omega0', help='Omega0 value for the simulation', 
-                    type=float, default=0.3089)
-    parser.add_argument('--h0', help='H0 value for the simulation', 
-                    type=float, default=0.677400)
+#     parser = argparse.ArgumentParser()
+#     parser.add_argument('-c', '--config', required=True, help='Configuration (.par) file for SAGE input', type=_abspath)
+#     parser.add_argument('-v', '--subvolumes', help='Comma- and dash-separated list of subvolumes to process', default='0')
+#     parser.add_argument('-b', '--sage-binary', required=True, help='Path to the SAGE binary to use', type=_abspath)
+#     parser.add_argument('-o', '--outdir', help='Auxiliary output directory, defaults to .', default=_abspath('.'),
+#                         type=_abspath)
+#     parser.add_argument('-k', '--keep', help='Keep temporary output files', action='store_true')
+#     parser.add_argument('-sn', '--snapshot', help='Comma-separated list of snapshot numbers to analyze', 
+#                    type=lambda x: [int(i) for i in x.split(',')], default=None)
+#     parser.add_argument('--sim', help='Simulation to use (0=miniUchuu, 1=miniMillennium, 2=MTNG)', 
+#                    type=int, default=0)
+#     parser.add_argument('--boxsize', help='Size of the simulation box in Mpc/h', 
+#                     type=float, default=400.0)
+#     parser.add_argument('--vol-frac', help='Volume fraction of the simulation box', 
+#                     type=float, default=0.0019)
+#     parser.add_argument('--age-alist-file', help='Path to the age list file, match with .par file',
+#                    default=None, type=_abspath)
+#     parser.add_argument('--Omega0', help='Omega0 value for the simulation', 
+#                     type=float, default=0.3089)
+#     parser.add_argument('--h0', help='H0 value for the simulation', 
+#                     type=float, default=0.677400)
+# ###
+
+#     pso_opts = parser.add_argument_group('PSO options')
+#     pso_opts.add_argument('-s', '--swarm-size', help='Size of the particle swarm. Defaults to 10 + sqrt(D) * 2 (D=number of dimensions)',
+#                           type=int, default=None)
+#     pso_opts.add_argument('-m', '--max-iterations', help='Maximum number of iterations to reach before giving up, defaults to 20',
+#                           default=10, type=int)
+#     pso_opts.add_argument('-S', '--space-file', help='File with the search space specification, defaults to space.txt',
+#                           default='space.txt', type=_abspath)
+#     pso_opts.add_argument('-t', '--stat-test', help='Stat function used to calculate the value of a particle, defaults to student-t',
+#                           default='student-t', choices=list(analysis.stat_tests.keys()))
+#     pso_opts.add_argument('-x', '--constraints', default='BHMF,SMF_z0,BHBM',
+#                           help=("Comma-separated list of constraints, any of BHMF, SMF_z0 or BHBM, defaults to 'BHMF,SMF_z0,BHBM'. "
+#                                 "Can specify a domain range after the name (e.g., 'SMF_z0(8-11)')"
+#                                 "and/or a relative weight (e.g. 'BHMF*6,SMF_z0(8-11)*10)'"))
+#     pso_opts.add_argument('-csv', '--csv-output', help='Path to save PSO results as CSV file. If not specified, no CSV will be generated.',
+#                       type=_abspath, default=None)
+#     pso_opts.add_argument('-r', '--random-seed', help='Random seed for reproducibility. If not specified, PSO will use random initialization.',
+#                       type=int, default=None)
+#     pso_opts.add_argument('--omega', help='PSO inertia weight (default: 0.729). Standard constriction coefficient from Clerc & Kennedy (2002).',
+#                       type=float, default=0.729)
+#     pso_opts.add_argument('--phip', help='PSO cognitive parameter (default: 1.49445). Particle learning from own best. Standard value ~1.5-2.0.',
+#                       type=float, default=1.49445)
+#     pso_opts.add_argument('--phig', help='PSO social parameter (default: 1.49445). Particle learning from swarm best. Standard value ~1.5-2.0.',
+#                       type=float, default=1.49445)
+
+# ### 
+#     hpc_opts = parser.add_argument_group('HPC options')
+#     hpc_opts.add_argument('-H', '--hpc-mode', help='Enable HPC mode', action='store_true')
+#     hpc_opts.add_argument('-C', '--cpus', help='Number of CPUs per sage instance', default=1, type=int)
+#     hpc_opts.add_argument('-M', '--memory', help='Memory needed by each sage instance', default='1500m')
+#     hpc_opts.add_argument('-N', '--nodes', help='Number of nodes to use', default=None, type=int)
+#     hpc_opts.add_argument('-a', '--account', help='Submit jobs using this account', default=None)
+#     hpc_opts.add_argument('-q', '--queue', help='Submit jobs to this queue', default=None)
+#     hpc_opts.add_argument('-w', '--walltime', help='Walltime for each submission, defaults to 1:00:00', default='1:00:00')
+#     hpc_opts.add_argument('-u', '--username', help='Username for SLURM job submission', default=None)
 ###
 
-    pso_opts = parser.add_argument_group('PSO options')
-    pso_opts.add_argument('-s', '--swarm-size', help='Size of the particle swarm. Defaults to 10 + sqrt(D) * 2 (D=number of dimensions)',
-                          type=int, default=None)
-    pso_opts.add_argument('-m', '--max-iterations', help='Maximum number of iterations to reach before giving up, defaults to 20',
-                          default=10, type=int)
-    pso_opts.add_argument('-S', '--space-file', help='File with the search space specification, defaults to space.txt',
-                          default='space.txt', type=_abspath)
-    pso_opts.add_argument('-t', '--stat-test', help='Stat function used to calculate the value of a particle, defaults to student-t',
-                          default='student-t', choices=list(analysis.stat_tests.keys()))
-    pso_opts.add_argument('-x', '--constraints', default='BHMF,SMF_z0,BHBM',
-                          help=("Comma-separated list of constraints, any of BHMF, SMF_z0 or BHBM, defaults to 'BHMF,SMF_z0,BHBM'. "
-                                "Can specify a domain range after the name (e.g., 'SMF_z0(8-11)')"
-                                "and/or a relative weight (e.g. 'BHMF*6,SMF_z0(8-11)*10)'"))
-    pso_opts.add_argument('-csv', '--csv-output', help='Path to save PSO results as CSV file. If not specified, no CSV will be generated.',
-                      type=_abspath, default=None)
-    pso_opts.add_argument('-r', '--random-seed', help='Random seed for reproducibility. If not specified, PSO will use random initialization.',
-                      type=int, default=None)
-    pso_opts.add_argument('--omega', help='PSO inertia weight (default: 0.729). Standard constriction coefficient from Clerc & Kennedy (2002).',
-                      type=float, default=0.729)
-    pso_opts.add_argument('--phip', help='PSO cognitive parameter (default: 1.49445). Particle learning from own best. Standard value ~1.5-2.0.',
-                      type=float, default=1.49445)
-    pso_opts.add_argument('--phig', help='PSO social parameter (default: 1.49445). Particle learning from swarm best. Standard value ~1.5-2.0.',
-                      type=float, default=1.49445)
+    # opts = parser.parse_args()
 
-### 
-    hpc_opts = parser.add_argument_group('HPC options')
-    hpc_opts.add_argument('-H', '--hpc-mode', help='Enable HPC mode', action='store_true')
-    hpc_opts.add_argument('-C', '--cpus', help='Number of CPUs per sage instance', default=1, type=int)
-    hpc_opts.add_argument('-M', '--memory', help='Memory needed by each sage instance', default='1500m')
-    hpc_opts.add_argument('-N', '--nodes', help='Number of nodes to use', default=None, type=int)
-    hpc_opts.add_argument('-a', '--account', help='Submit jobs using this account', default=None)
-    hpc_opts.add_argument('-q', '--queue', help='Submit jobs to this queue', default=None)
-    hpc_opts.add_argument('-w', '--walltime', help='Walltime for each submission, defaults to 1:00:00', default='1:00:00')
-    hpc_opts.add_argument('-u', '--username', help='Username for SLURM job submission', default=None)
-###
-
-    opts = parser.parse_args()
-
-    if not opts.config:
-        parser.error('-c option is mandatory but missing')
+    # if not opts.config:
+    #     parser.error('-c option is mandatory but missing')
 
     if opts.snapshot:
         snapshots = opts.snapshot
