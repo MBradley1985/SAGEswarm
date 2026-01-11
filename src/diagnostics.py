@@ -426,7 +426,7 @@ def create_combined_constraint_grids(output_dir='parameter_plots', png_dir=None)
     
     # Define patterns to match different plot types
     plot_patterns = {
-        'iterations': '*_all.png'
+        'iterations': '*_all.pdf'
     }
     
     # Define constraints to look for
@@ -478,7 +478,7 @@ def create_combined_constraint_grids(output_dir='parameter_plots', png_dir=None)
             ax.axis('off')
 
         plt.tight_layout()
-        plt.savefig(os.path.join(output_dir, f'combined_{plot_type}_grid.png'), dpi=300)
+        plt.savefig(os.path.join(output_dir, f'combined_{plot_type}_grid.pdf'), dpi=300)
         plt.close()
         logger.info("Created combined grid figure")
 
@@ -1061,7 +1061,7 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
                     sage_data,
                     tracks_dir
                 )
-                outfile = os.path.join(output_dir, f'{os.path.splitext(filename)[0]}_all.png')
+                outfile = os.path.join(output_dir, f'{os.path.splitext(filename)[0]}_all.pdf')
                 fig.savefig(outfile, dpi=300)
                 logger.info(f"Saved iteration plot to {outfile}")
                 plt.close(fig)
@@ -1093,7 +1093,7 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
                     sage_data,
                     tracks_dir
                 )
-                outfile = os.path.join(output_dir, f'{os.path.splitext(filename)[0]}_all.png')
+                outfile = os.path.join(output_dir, f'{os.path.splitext(filename)[0]}_all.pdf')
                 fig.savefig(outfile, dpi=300)
                 logger.info(f"Saved iteration plot to {outfile}")
                 plt.close(fig)
@@ -1125,7 +1125,7 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
                     sage_data,
                     tracks_dir
                 )
-                outfile = os.path.join(output_dir, f'{os.path.splitext(filename)[0]}_all.png')
+                outfile = os.path.join(output_dir, f'{os.path.splitext(filename)[0]}_all.pdf')
                 fig.savefig(outfile, dpi=300)
                 logger.info(f"Saved iteration plot to {outfile}")
                 plt.close(fig)
@@ -1157,7 +1157,7 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
                     sage_data,
                     tracks_dir
                 )
-                outfile = os.path.join(output_dir, f'{os.path.splitext(filename)[0]}_all.png')
+                outfile = os.path.join(output_dir, f'{os.path.splitext(filename)[0]}_all.pdf')
                 fig.savefig(outfile, dpi=300)
                 logger.info(f"Saved iteration plot to {outfile}")
                 plt.close(fig)

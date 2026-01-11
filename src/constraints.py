@@ -401,7 +401,7 @@ class Constraint(object):
         leg.draw_frame(False)
         for t in leg.get_texts():
             t.set_fontsize('medium')
-        plotfile = os.path.join(output_dir, 'smf_sage.png')
+        plotfile = os.path.join(output_dir, 'smf_sage.pdf')
         plt.savefig(plotfile, dpi=100)
         plt.close()
         return
@@ -432,7 +432,7 @@ class Constraint(object):
         leg.draw_frame(False)
         for t in leg.get_texts():
             t.set_fontsize('medium')
-        plotfile = os.path.join(output_dir, 'bhmf_sage.png')
+        plotfile = os.path.join(output_dir, 'bhmf_sage.pdf')
         plt.savefig(plotfile, dpi=100)
         plt.close()
         return
@@ -463,7 +463,7 @@ class Constraint(object):
         leg.draw_frame(False)
         for t in leg.get_texts():
             t.set_fontsize('medium')
-        plotfile = os.path.join(output_dir, 'himf_sage.png')
+        plotfile = os.path.join(output_dir, 'himf_sage.pdf')
         plt.savefig(plotfile, dpi=100)
         plt.close()
         return
@@ -502,7 +502,7 @@ class Constraint(object):
         leg.draw_frame(False)
         for t in leg.get_texts():
             t.set_fontsize('medium')
-        plotfile = os.path.join(output_dir, 'bhbm_sage.png')
+        plotfile = os.path.join(output_dir, 'bhbm_sage.pdf')
         plt.savefig(plotfile, dpi=100)
         plt.close()
         return
@@ -533,7 +533,7 @@ class Constraint(object):
         leg.draw_frame(False)
         for t in leg.get_texts():
             t.set_fontsize('medium')
-        plotfile = os.path.join(output_dir, 'csfrd_sage.png')
+        plotfile = os.path.join(output_dir, 'csfrd_sage.pdf')
         plt.savefig(plotfile, dpi=100)
         plt.close()
         return
@@ -570,7 +570,7 @@ class Constraint(object):
         ax.legend(loc='best', fontsize=8, frameon=False)
         ax.grid(alpha=0.3)
         
-        plotfile = os.path.join(output_dir, f'{self.__class__.__name__}_diagnostic.png')
+        plotfile = os.path.join(output_dir, f'{self.__class__.__name__}_diagnostic.pdf')
         plt.savefig(plotfile, dpi=100, bbox_inches='tight')
         plt.close()
         return

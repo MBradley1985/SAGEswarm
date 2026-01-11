@@ -160,7 +160,7 @@ def test_sphere():
     plot_contour_with_optimum(
         sphere_2d, bounds, optimum, result,
         'Sphere Function: PSO Optimization',
-        'sphere_pso_test.png'
+        'sphere_pso_test.pdf'
     )
     
     return abs(best_fitness) < 0.01
@@ -198,7 +198,7 @@ def test_rosenbrock():
     plot_contour_with_optimum(
         rosenbrock_2d, bounds, optimum, result,
         'Rosenbrock Function: PSO Optimization',
-        'rosenbrock_pso_test.png'
+        'rosenbrock_pso_test.pdf'
     )
     
     return abs(best_fitness) < 0.1

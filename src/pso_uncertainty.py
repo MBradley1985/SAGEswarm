@@ -207,7 +207,7 @@ def plot_corner_with_uncertainties(results, scores, output_dir=None, best_positi
     plt.tight_layout()
     
     if output_dir:
-        plt.savefig(os.path.join(output_dir, 'parameter_correlations.png'), 
+        plt.savefig(os.path.join(output_dir, 'parameter_correlations.pdf'), 
                    dpi=300, bbox_inches='tight')
     
     return g
@@ -314,7 +314,7 @@ def plot_parameter_distributions(results, scores, output_dir=None, best_position
     plt.tight_layout()
     
     if output_dir:
-        plt.savefig(os.path.join(output_dir, 'parameter_distributions.png'), 
+        plt.savefig(os.path.join(output_dir, 'parameter_distributions.pdf'), 
                    dpi=300, bbox_inches='tight')
     
     return fig

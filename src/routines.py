@@ -492,8 +492,8 @@ def savepng(filename, xsize=1024, ysize=None, fig=None, transparent=False, compa
     if compact: fig.subplots_adjust(hspace=0, wspace=0, left=0, bottom=0, right=1.0, top=1.0)
     
     filename = str(filename)
-    if filename[-4:] != '.png':
-        filename = filename+'.png'
+    if filename[-4:] != '.pdf':
+        filename = filename+'.pdf'
     fig.savefig(filename, dpi=mydpi, bbox_inches='tight', transparent=transparent)
 
 
