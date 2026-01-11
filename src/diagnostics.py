@@ -180,13 +180,58 @@ def create_iteration_plot(filename, num_particles, num_iterations, obs_data, sag
             'legend_loc': 'upper left',
             'transform_y': lambda y: y
         },
-        'HSMR': {
-            'xlabel': r'$\log_{10} M_{\mathrm{halo}}\ (M_{\odot})$',
-            'ylabel': r'$\log_{10} M_{\mathrm{stars}}\ (M_{\odot})$',
-            'xlim': [11.5, 15.0],
-            'ylim': [7.0, 13.0],
+        'HIMF': {
+            'xlabel': r'$\log_{10} M_{\mathrm{HI}}\ (M_{\odot})$',
+            'ylabel': r'$\phi\ (\mathrm{Mpc}^{-3}\ \mathrm{dex}^{-1})$',
+            'xlim': [8.0, 11.5],
+            'ylim': [1.0e-6, 1.0e-1],
+            'yscale': 'log',
+            'legend_loc': 'upper right',
+            'transform_y': lambda y: 10**np.array(y)
+        },
+        'H2MF': {
+            'xlabel': r'$\log_{10} M_{\mathrm{H2}}\ (M_{\odot})$',
+            'ylabel': r'$\phi\ (\mathrm{Mpc}^{-3}\ \mathrm{dex}^{-1})$',
+            'xlim': [8.0, 10.5],
+            'ylim': [1.0e-5, 1.0e-1],
+            'yscale': 'log',
+            'legend_loc': 'upper right',
+            'transform_y': lambda y: 10**np.array(y)
+        },
+        'MZR': {
+            'xlabel': r'$\log_{10} M_{\mathrm{stars}}\ (M_{\odot})$',
+            'ylabel': r'$12 + \log(\mathrm{O/H})$',
+            'xlim': [8.5, 11.0],
+            'ylim': [8.0, 9.5],
             'yscale': 'linear',
             'legend_loc': 'lower right',
+            'transform_y': lambda y: y
+        },
+        'SHMR': {
+            'xlabel': r'$\log_{10} M_{\mathrm{halo}}\ (M_{\odot})$',
+            'ylabel': r'$\log_{10} M_{\mathrm{stars}}\ (M_{\odot})$',
+            'xlim': [11.0, 15.0],
+            'ylim': [8.0, 12.0],
+            'yscale': 'linear',
+            'legend_loc': 'lower right',
+            'transform_y': lambda y: y
+        },
+        'SMD': {
+            'xlabel': r'$z$',
+            'ylabel': r'$\log_{10} \rho_{\star}\ (M_{\odot}\ \mathrm{Mpc}^{-3})$',
+            'xlim': [0.0, 12.0],
+            'ylim': [5.0, 9.0],
+            'yscale': 'linear',
+            'legend_loc': 'lower left',
+            'transform_y': lambda y: y
+        },
+        'CSFRDH': {
+            'xlabel': r'Lookback Time (Gyr)',
+            'ylabel': r'$\log_{10}$ SFRD $(M_{\odot}\ \mathrm{yr}^{-1}\ \mathrm{Mpc}^{-3})$',
+            'xlim': [0.0, 14.0],
+            'ylim': [-3.0, 0.0],
+            'yscale': 'linear',
+            'legend_loc': 'upper right',
             'transform_y': lambda y: y
         }
     }
@@ -196,7 +241,7 @@ def create_iteration_plot(filename, num_particles, num_iterations, obs_data, sag
     x_sage, y_sage, sage_label = sage_data
     
     # Convert y values based on plot type
-    if plot_type in ['SMF', 'BHMF']:
+    if plot_type in ['SMF', 'BHMF', 'HIMF', 'H2MF']:
         y_obs_converted = [10**y for y in y_obs]
         y_sage_converted = y_sage # Changed this line
     else:
@@ -295,29 +340,6 @@ def create_iteration_plot(filename, num_particles, num_iterations, obs_data, sag
         mass, phi = load_observation('../data/SHARK_BHBM_z0.csv', cols=[0,1])
         ax.plot(mass, phi, 'g--', label='SHARK')
 
-    elif plot_type == 'HSMR' and 'HSMR_z0_dump.txt' in filename:
-        mass, phi = load_observation('../data/SHARK_HSMR.csv', cols=[0,1])
-        ax.plot(mass, transform_y(phi), 'g--', label='SHARK')
-
-    elif plot_type == 'HSMR' and 'HSMR_z05_dump.txt' in filename:
-        mass, phi = load_observation('../data/SHARK_HSMR.csv', cols=[2,3])
-        ax.plot(mass, transform_y(phi), 'g--', label='SHARK')
-
-    elif plot_type == 'HSMR' and 'HSMR_z10_dump.txt' in filename:
-        mass, phi = load_observation('../data/SHARK_HSMR.csv', cols=[4,5])
-        ax.plot(mass, transform_y(phi), 'g--', label='SHARK')
-
-    elif plot_type == 'HSMR' and 'HSMR_z20_dump.txt' in filename:
-        mass, phi = load_observation('../data/SHARK_HSMR.csv', cols=[6,7])
-        ax.plot(mass, transform_y(phi), 'g--', label='SHARK')
-
-    elif plot_type == 'HSMR' and 'HSMR_z30_dump.txt' in filename:
-        mass, phi = load_observation('../data/SHARK_HSMR.csv', cols=[8,9])
-        ax.plot(mass, transform_y(phi), 'g--', label='SHARK')
-
-    elif plot_type == 'HSMR' and 'HSMR_z40_dump.txt' in filename:
-        mass, phi = load_observation('../data/SHARK_HSMR.csv', cols=[10,11])
-        ax.plot(mass, transform_y(phi), 'g--', label='SHARK')
         
 
     # Setup axes
@@ -352,8 +374,23 @@ def bhmf_processing_iteration(*args, **kwargs):
 def bhbm_processing_iteration(*args, **kwargs):
     return create_iteration_plot(*args, **kwargs, plot_type='BHBM')
 
-def hsmr_processing_iteration(*args, **kwargs):
-    return create_iteration_plot(*args, **kwargs, plot_type='HSMR')
+def himf_processing_iteration(*args, **kwargs):
+    return create_iteration_plot(*args, **kwargs, plot_type='HIMF')
+
+def h2mf_processing_iteration(*args, **kwargs):
+    return create_iteration_plot(*args, **kwargs, plot_type='H2MF')
+
+def mzr_processing_iteration(*args, **kwargs):
+    return create_iteration_plot(*args, **kwargs, plot_type='MZR')
+
+def shmr_processing_iteration(*args, **kwargs):
+    return create_iteration_plot(*args, **kwargs, plot_type='SHMR')
+
+def smd_processing_iteration(*args, **kwargs):
+    return create_iteration_plot(*args, **kwargs, plot_type='SMD')
+
+def csfrdh_processing_iteration(*args, **kwargs):
+    return create_iteration_plot(*args, **kwargs, plot_type='CSFRDH')
 
 def load_all_params(directory, param_names, redshifts):
     """Load parameter values from CSV files"""
@@ -430,7 +467,7 @@ def create_combined_constraint_grids(output_dir='parameter_plots', png_dir=None)
     }
     
     # Define constraints to look for
-    constraints = ['SMF', 'BHMF', 'BHBM', 'HSMR']
+    constraints = ['SMF', 'BHMF', 'BHBM', 'SHMR']
     
     # Process each plot type
     for plot_type, pattern in plot_patterns.items():
@@ -576,26 +613,6 @@ def load_sage_data_forBHMF():
         
     return data_by_z
 
-def load_sage_data_forHSMR():
-    """Load HSMR data from SAGE-miniUchuu"""
-    sage_data = load_observation('../data/sage_halostellar_all_redshifts.csv', cols=[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,
-                                                              15,16,17,18,19,20,21])
-    # Dictionary to store data for each redshift
-    data_by_z = {}
-    
-    # List of redshifts and their corresponding column indices
-    redshifts = [0.0, 0.5, 1.0, 2.0, 3.0, 4.0]
-    col_indices = [(0,1), (4,5), (8,9), (12,13), (16,17), (20,21)]
-    
-    # Process data for each redshift
-    for z, (mass_idx, phi_idx) in zip(redshifts, col_indices):
-        logm = sage_data[mass_idx]
-        logphi = sage_data[phi_idx]
-        valid_mask = ~np.isnan(logm) & ~np.isnan(logphi)
-        data_by_z[z] = (logm[valid_mask], logphi[valid_mask], f'SAGE (z={z})')
-    
-    return data_by_z
-
 def load_bhbm_data():
     """Load BHBM data from SAGE-miniUchuu and observations"""
     # Load observational data from Haring & Rix 2004
@@ -632,22 +649,6 @@ def load_bhbm_data():
                 (bulgemass_z2, blackholemass_z2, 'Zhang et al. 2023'),
                 (logm_sage[valid_mask], logbh_sage[valid_mask], f'SAGE (z={z})')
             )
-    
-    return data_by_z
-
-def load_hsmr_data():
-    """Load HSMR data"""
-    new_data = load_observation('../data/Moster_2013.csv', cols=[0,1,2,3,4,5,6,7,8,9,10,11])
-    data_by_z = {}
-    
-    redshifts = [0.0, 0.5, 1.0, 2.0, 3.0, 4.0] # Add relevant redshifts
-    col_indices = [(0,1), (2,3), (4,5), (6,7), (8,9), (10,11)] # Add column indices
-    
-    for z, (idx1, idx2) in zip(redshifts, col_indices):
-        x = new_data[idx1]
-        y = new_data[idx2] 
-        valid_mask = ~np.isnan(x) & ~np.isnan(y)
-        data_by_z[z] = (x[valid_mask], y[valid_mask], f'Moster et al., 2013 (z={z})')
     
     return data_by_z
 
@@ -851,25 +852,210 @@ def get_bhbm_files_map(config_opts):
     logger.info(f"Found {len(bhbm_files)} BHBM files to process")
     return bhbm_files
 
-def get_hsmr_files_map(config_opts):
-    """Create mapping of new constraint dump files to observations"""
-    new_data = load_hsmr_data()
-    sage_data = load_sage_data_forHSMR()
-    
-    logger.info("Checking for new constraint dump files...")
+
+def load_himf_obs_data():
+    """Load HIMF observational data from Zwaan et al. 2005"""
+    DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
+    try:
+        obs_data = np.loadtxt(os.path.join(DATA_DIR, 'HIMF_Zwaan2005.dat'), comments='#')
+        x_obs = obs_data[:, 0]  # log10(MHI)
+        y_obs = obs_data[:, 1]  # log10(phi)
+        return (x_obs, y_obs, 'Zwaan et al. 2005')
+    except:
+        return (np.array([9.0, 10.0]), np.array([-2.0, -3.0]), 'Zwaan et al. 2005')
+
+
+def load_h2mf_obs_data():
+    """Load H2MF observational data from Fletcher et al. 2021"""
+    DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
+    try:
+        obs_data = np.loadtxt(os.path.join(DATA_DIR, 'H2MF_Fletcher21_DetNonDet.dat'), comments='#')
+        x_obs = obs_data[:, 0]  # log10(MH2)
+        y_obs = obs_data[:, 1]  # log10(phi)
+        return (x_obs, y_obs, 'Fletcher et al. 2021')
+    except:
+        return (np.array([9.0, 10.0]), np.array([-2.0, -3.0]), 'Fletcher et al. 2021')
+
+
+def load_mzr_obs_data():
+    """Load MZR observational data from Tremonti et al. 2004"""
+    DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
+    try:
+        obs_data = np.loadtxt(os.path.join(DATA_DIR, 'Tremonti04.dat'), comments='#')
+        x_obs = obs_data[:, 0]  # log10(Mstars)
+        y_obs = obs_data[:, 1]  # 12+log(O/H)
+        return (x_obs, y_obs, 'Tremonti et al. 2004')
+    except:
+        return (np.array([9.0, 11.0]), np.array([8.5, 9.0]), 'Tremonti et al. 2004')
+
+
+def load_shmr_obs_data():
+    """Load SHMR observational data from Moster et al. 2013"""
+    DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
+    try:
+        obs_data = np.loadtxt(os.path.join(DATA_DIR, 'Moster_2013.csv'), delimiter='\t')
+        x_obs = obs_data[:, 0]  # log10(Mhalo)
+        y_obs = obs_data[:, 1]  # log10(Mstars)
+        valid = ~np.isnan(x_obs) & ~np.isnan(y_obs)
+        return (x_obs[valid], y_obs[valid], 'Moster et al. 2013')
+    except:
+        return (np.array([12.0, 14.0]), np.array([10.0, 11.0]), 'Moster et al. 2013')
+
+
+def load_smd_obs_data():
+    """Load SMD observational data"""
+    DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
+    try:
+        with open(os.path.join(DATA_DIR, 'SMD.ecsv'), 'r') as f:
+            lines = f.readlines()
+        data_start = 0
+        for i, line in enumerate(lines):
+            if not line.startswith('#') and 'z rho' not in line:
+                data_start = i
+                break
+        z_obs, rho_50 = [], []
+        for line in lines[data_start:]:
+            if line.strip():
+                parts = line.split()
+                z_obs.append(float(parts[0]))
+                rho_50.append(np.log10(float(parts[1])))
+        return (np.array(z_obs), np.array(rho_50), 'Weaver et al. 2023')
+    except:
+        return (np.array([0.0, 2.0]), np.array([8.0, 7.5]), 'Weaver et al. 2023')
+
+
+def get_himf_files_map(config_opts):
+    """Create mapping of HIMF dump files to their corresponding observational data"""
+    obs_data = load_himf_obs_data()
+    sage_data = (np.array([9.0, 10.0]), np.array([1e-2, 1e-3]), 'SAGE')
+
+    logger.info("Checking for HIMF dump files in directory...")
     files = {}
-    
-    for z in get_all_redshifts():
-        _, z_str = get_redshift_info(z=z)
-        if z_str is None:
-            continue
-            
-        filename = f'HSMR_z{z_str}_dump.txt'
-        filepath = os.path.join(config_opts.outdir, filename)
-        if os.path.exists(filepath):
-            files[filename] = (new_data[z], sage_data[z])
-            
+
+    filename = 'HIMF_dump.txt'
+    filepath = os.path.join(config_opts.outdir, filename)
+    if os.path.exists(filepath):
+        logger.info(f"Found: {filename}")
+        files[filename] = (obs_data, sage_data)
+    else:
+        logger.info(f"Not found: {filename}")
+
+    logger.info(f"Found {len(files)} HIMF files to process")
     return files
+
+
+def get_h2mf_files_map(config_opts):
+    """Create mapping of H2MF dump files to their corresponding observational data"""
+    obs_data = load_h2mf_obs_data()
+    sage_data = (np.array([9.0, 10.0]), np.array([1e-2, 1e-3]), 'SAGE')
+
+    logger.info("Checking for H2MF dump files in directory...")
+    files = {}
+
+    filename = 'H2MF_dump.txt'
+    filepath = os.path.join(config_opts.outdir, filename)
+    if os.path.exists(filepath):
+        logger.info(f"Found: {filename}")
+        files[filename] = (obs_data, sage_data)
+    else:
+        logger.info(f"Not found: {filename}")
+
+    logger.info(f"Found {len(files)} H2MF files to process")
+    return files
+
+
+def get_mzr_files_map(config_opts):
+    """Create mapping of MZR dump files to their corresponding observational data"""
+    obs_data = load_mzr_obs_data()
+    sage_data = (np.array([9.0, 11.0]), np.array([8.5, 9.0]), 'SAGE')
+
+    logger.info("Checking for MZR dump files in directory...")
+    files = {}
+
+    filename = 'MZR_dump.txt'
+    filepath = os.path.join(config_opts.outdir, filename)
+    if os.path.exists(filepath):
+        logger.info(f"Found: {filename}")
+        files[filename] = (obs_data, sage_data)
+    else:
+        logger.info(f"Not found: {filename}")
+
+    logger.info(f"Found {len(files)} MZR files to process")
+    return files
+
+
+def get_shmr_files_map(config_opts):
+    """Create mapping of SHMR dump files to their corresponding observational data"""
+    obs_data = load_shmr_obs_data()
+    sage_data = (np.array([12.0, 14.0]), np.array([10.0, 11.0]), 'SAGE')
+
+    logger.info("Checking for SHMR dump files in directory...")
+    files = {}
+
+    filename = 'SHMR_dump.txt'
+    filepath = os.path.join(config_opts.outdir, filename)
+    if os.path.exists(filepath):
+        logger.info(f"Found: {filename}")
+        files[filename] = (obs_data, sage_data)
+    else:
+        logger.info(f"Not found: {filename}")
+
+    logger.info(f"Found {len(files)} SHMR files to process")
+    return files
+
+
+def get_smd_files_map(config_opts):
+    """Create mapping of SMD dump files to their corresponding observational data"""
+    obs_data = load_smd_obs_data()
+    sage_data = (np.array([0.0, 2.0]), np.array([8.0, 7.5]), 'SAGE')
+
+    logger.info("Checking for SMD dump files in directory...")
+    files = {}
+
+    filename = 'SMD_dump.txt'
+    filepath = os.path.join(config_opts.outdir, filename)
+    if os.path.exists(filepath):
+        logger.info(f"Found: {filename}")
+        files[filename] = (obs_data, sage_data)
+    else:
+        logger.info(f"Not found: {filename}")
+
+    logger.info(f"Found {len(files)} SMD files to process")
+    return files
+
+
+def load_csfrdh_obs_data():
+    """Load CSFRDH observational data from Driver et al. 2023"""
+    DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
+    try:
+        # Load Driver et al. 2023 data
+        obs_data = np.loadtxt(os.path.join(DATA_DIR, 'Driver23_CSFH.dat'), comments='#')
+        x_obs = obs_data[:, 0]  # Lookback time (Gyr)
+        y_obs = obs_data[:, 1]  # log10(SFRD)
+        return (x_obs, y_obs, 'Driver et al. 2023')
+    except:
+        return (np.array([0.0, 10.0]), np.array([-1.0, -2.0]), 'Driver et al. 2023')
+
+
+def get_csfrdh_files_map(config_opts):
+    """Create mapping of CSFRDH dump files to their corresponding observational data"""
+    obs_data = load_csfrdh_obs_data()
+    sage_data = (np.array([0.0, 10.0]), np.array([-1.0, -2.0]), 'SAGE')
+
+    logger.info("Checking for CSFRDH dump files in directory...")
+    files = {}
+
+    filename = 'CSFRDH_dump.txt'
+    filepath = os.path.join(config_opts.outdir, filename)
+    if os.path.exists(filepath):
+        logger.info(f"Found: {filename}")
+        files[filename] = (obs_data, sage_data)
+    else:
+        logger.info(f"Not found: {filename}")
+
+    logger.info(f"Found {len(files)} CSFRDH files to process")
+    return files
+
 
 def file_exists_and_not_empty(filepath):
     """Check if a file exists and is not empty."""
@@ -1036,10 +1222,25 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
     logger.info(f"Found {len(bhmf_files)} BHMF files to process")
 
     bhbm_files = get_bhbm_files_map(config_opts)
-    logger.info(f"Found {len(bhbm_files)} BHBM files to process")   
+    logger.info(f"Found {len(bhbm_files)} BHBM files to process")
 
-    hsmr_files = get_hsmr_files_map(config_opts)
-    logger.info(f"Found {len(hsmr_files)} HSMR files to process") 
+    himf_files = get_himf_files_map(config_opts)
+    logger.info(f"Found {len(himf_files)} HIMF files to process")
+
+    h2mf_files = get_h2mf_files_map(config_opts)
+    logger.info(f"Found {len(h2mf_files)} H2MF files to process")
+
+    mzr_files = get_mzr_files_map(config_opts)
+    logger.info(f"Found {len(mzr_files)} MZR files to process")
+
+    shmr_files = get_shmr_files_map(config_opts)
+    logger.info(f"Found {len(shmr_files)} SHMR files to process")
+
+    smd_files = get_smd_files_map(config_opts)
+    logger.info(f"Found {len(smd_files)} SMD files to process")
+
+    csfrdh_files = get_csfrdh_files_map(config_opts)
+    logger.info(f"Found {len(csfrdh_files)} CSFRDH files to process")
 
     # Process SMF files
     processed_any_smf = False
@@ -1135,21 +1336,20 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
     if not processed_any_bhbm:
         logger.info("Warning: No BHBM files were found to process!")
         logger.info(f"Expected files in: {output_dir}")
-        logger.info("Expected files: %s", list(bhbm_files.keys()))   
+        logger.info("Expected files: %s", list(bhbm_files.keys()))
 
-    # Process HSMR files
-    processed_any_hsmr = False
-    for filename, (obs_data, sage_data) in hsmr_files.items():
+    # Process HIMF files
+    processed_any_himf = False
+    for filename, (obs_data, sage_data) in himf_files.items():
         filepath = os.path.join(output_dir, filename)
-        
+
         if os.path.exists(filepath):
             logger.info(f"\nProcessing {filename}...")
-            processed_any_hsmr = True
-            
-            # Create iteration plot
+            processed_any_himf = True
+
             try:
                 logger.info("Creating iteration plot...")
-                fig = hsmr_processing_iteration(
+                fig = himf_processing_iteration(
                     filepath,
                     num_particles,
                     num_iterations,
@@ -1163,12 +1363,154 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
                 plt.close(fig)
             except Exception as e:
                 logger.error(f"Error creating iteration plot: {str(e)}")
-            
-    if not processed_any_hsmr:
-        logger.info("Warning: No HSMR files were found to process!")
-        logger.info(f"Expected files in: {output_dir}")
-        logger.info("Expected files: %s", list(hsmr_files.keys()))
 
+    if not processed_any_himf:
+        logger.info("Warning: No HIMF files were found to process!")
+
+    # Process H2MF files
+    processed_any_h2mf = False
+    for filename, (obs_data, sage_data) in h2mf_files.items():
+        filepath = os.path.join(output_dir, filename)
+
+        if os.path.exists(filepath):
+            logger.info(f"\nProcessing {filename}...")
+            processed_any_h2mf = True
+
+            try:
+                logger.info("Creating iteration plot...")
+                fig = h2mf_processing_iteration(
+                    filepath,
+                    num_particles,
+                    num_iterations,
+                    obs_data,
+                    sage_data,
+                    tracks_dir
+                )
+                outfile = os.path.join(output_dir, f'{os.path.splitext(filename)[0]}_all.pdf')
+                fig.savefig(outfile, dpi=300)
+                logger.info(f"Saved iteration plot to {outfile}")
+                plt.close(fig)
+            except Exception as e:
+                logger.error(f"Error creating iteration plot: {str(e)}")
+
+    if not processed_any_h2mf:
+        logger.info("Warning: No H2MF files were found to process!")
+
+    # Process MZR files
+    processed_any_mzr = False
+    for filename, (obs_data, sage_data) in mzr_files.items():
+        filepath = os.path.join(output_dir, filename)
+
+        if os.path.exists(filepath):
+            logger.info(f"\nProcessing {filename}...")
+            processed_any_mzr = True
+
+            try:
+                logger.info("Creating iteration plot...")
+                fig = mzr_processing_iteration(
+                    filepath,
+                    num_particles,
+                    num_iterations,
+                    obs_data,
+                    sage_data,
+                    tracks_dir
+                )
+                outfile = os.path.join(output_dir, f'{os.path.splitext(filename)[0]}_all.pdf')
+                fig.savefig(outfile, dpi=300)
+                logger.info(f"Saved iteration plot to {outfile}")
+                plt.close(fig)
+            except Exception as e:
+                logger.error(f"Error creating iteration plot: {str(e)}")
+
+    if not processed_any_mzr:
+        logger.info("Warning: No MZR files were found to process!")
+
+    # Process SHMR files
+    processed_any_shmr = False
+    for filename, (obs_data, sage_data) in shmr_files.items():
+        filepath = os.path.join(output_dir, filename)
+
+        if os.path.exists(filepath):
+            logger.info(f"\nProcessing {filename}...")
+            processed_any_shmr = True
+
+            try:
+                logger.info("Creating iteration plot...")
+                fig = shmr_processing_iteration(
+                    filepath,
+                    num_particles,
+                    num_iterations,
+                    obs_data,
+                    sage_data,
+                    tracks_dir
+                )
+                outfile = os.path.join(output_dir, f'{os.path.splitext(filename)[0]}_all.pdf')
+                fig.savefig(outfile, dpi=300)
+                logger.info(f"Saved iteration plot to {outfile}")
+                plt.close(fig)
+            except Exception as e:
+                logger.error(f"Error creating iteration plot: {str(e)}")
+
+    if not processed_any_shmr:
+        logger.info("Warning: No SHMR files were found to process!")
+
+    # Process SMD files
+    processed_any_smd = False
+    for filename, (obs_data, sage_data) in smd_files.items():
+        filepath = os.path.join(output_dir, filename)
+
+        if os.path.exists(filepath):
+            logger.info(f"\nProcessing {filename}...")
+            processed_any_smd = True
+
+            try:
+                logger.info("Creating iteration plot...")
+                fig = smd_processing_iteration(
+                    filepath,
+                    num_particles,
+                    num_iterations,
+                    obs_data,
+                    sage_data,
+                    tracks_dir
+                )
+                outfile = os.path.join(output_dir, f'{os.path.splitext(filename)[0]}_all.pdf')
+                fig.savefig(outfile, dpi=300)
+                logger.info(f"Saved iteration plot to {outfile}")
+                plt.close(fig)
+            except Exception as e:
+                logger.error(f"Error creating iteration plot: {str(e)}")
+
+    if not processed_any_smd:
+        logger.info("Warning: No SMD files were found to process!")
+
+    # Process CSFRDH files
+    processed_any_csfrdh = False
+    for filename, (obs_data, sage_data) in csfrdh_files.items():
+        filepath = os.path.join(output_dir, filename)
+
+        if os.path.exists(filepath):
+            logger.info(f"\nProcessing {filename}...")
+            processed_any_csfrdh = True
+
+            try:
+                logger.info("Creating iteration plot...")
+                fig = csfrdh_processing_iteration(
+                    filepath,
+                    num_particles,
+                    num_iterations,
+                    obs_data,
+                    sage_data,
+                    tracks_dir
+                )
+                outfile = os.path.join(output_dir, f'{os.path.splitext(filename)[0]}_all.pdf')
+                fig.savefig(outfile, dpi=300)
+                logger.info(f"Saved iteration plot to {outfile}")
+                plt.close(fig)
+            except Exception as e:
+                logger.error(f"Error creating iteration plot: {str(e)}")
+
+    if not processed_any_csfrdh:
+        logger.info("Warning: No CSFRDH files were found to process!")
 
     # Load parameter values
     logger.info("Processing parameter evolution...")

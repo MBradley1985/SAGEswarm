@@ -1,3 +1,7 @@
-RadioModeEfficiency,eRadio,1,0.002,0.2
-QuasarModeEfficiency,eQuasar,0,500,3000
-BlackHoleGrowthRate,eBHgrowth,1,0.005,0.05
+SfrEfficiency,eSFR,0,0.01,0.05
+FeedbackReheatingEpsilon,eReheat,0,2.0,4.0
+FeedbackEjectionEfficiency,eEject,0,0.1,1.0
+ReIncorporationFactor,eReinc,0,0.05,0.3
+RadioModeEfficiency,eRadio,0,0.01,0.2
+QuasarModeEfficiency,eQuasar,0,0.001,0.1
+BlackHoleGrowthRate,eBHgrowth,0,0.001,0.5

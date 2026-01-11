@@ -47,11 +47,11 @@ def setup_logging(outdir):
 
 def get_required_snapshots(constraints_str):
     """Get all unique snapshots needed for constraints"""
-    # Map of constraint classes to their snapshots 
+    # Map of constraint classes to their snapshots
     snapshot_map = {
         'SMF_z0': [63],
         'SMF_z05': [48],
-        'SMF_z10': [40], 
+        'SMF_z10': [40],
         'SMF_z20': [32],
         'SMF_z30': [27],
         'SMF_z40': [23],
@@ -59,7 +59,11 @@ def get_required_snapshots(constraints_str):
         'BHMF_z10': [40],
         'BHBM': [63],
         'CSFRDH': [23, 27, 32, 36, 40, 44, 48, 52, 56, 60, 63],  # Snapshots spanning cosmic history
-        'HIMF': [63]
+        'HIMF': [63],
+        'H2MF': [63],
+        'MZR': [63],
+        'SHMR': [63],
+        'SMD': [63]
     }
     
     snapshots = set()
@@ -87,8 +91,12 @@ def cleanup_files(opts):
         'smf_dumps': os.path.join(opts.outdir, 'SMF_z*_dump.txt'),
         'bhmf_dump': os.path.join(opts.outdir, 'BHMF_z*_dump.txt'),
         'bhbm_dump': os.path.join(opts.outdir, 'BHBM_dump.txt'),
-        'hsmr_dump': os.path.join(opts.outdir, 'HSMR_z*_dump.txt'),
-        'CSFRDH_dump': os.path.join(opts.outdir, 'CSFRDH_dump.txt')
+        'CSFRDH_dump': os.path.join(opts.outdir, 'CSFRDH_dump.txt'),
+        'himf_dump': os.path.join(opts.outdir, 'HIMF_dump.txt'),
+        'h2mf_dump': os.path.join(opts.outdir, 'H2MF_dump.txt'),
+        'mzr_dump': os.path.join(opts.outdir, 'MZR_dump.txt'),
+        'shmr_dump': os.path.join(opts.outdir, 'SHMR_dump.txt'),
+        'smd_dump': os.path.join(opts.outdir, 'SMD_dump.txt')
     }
 
     # Delete dump files

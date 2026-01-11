@@ -11,7 +11,7 @@ if [ $# -lt 2 ]; then
     echo "Constraints can be any combination of:"
     echo "  SMF_z0, SMF_z02, SMF_z05, SMF_z08, SMF_z10, SMF_z11, SMF_z15, SMF_z20"
     echo "  SMF_z24, SMF_z31, SMF_z36, SMF_z46, SMF_z57, SMF_z63, SMF_z77, SMF_z85, SMF_z104"
-    echo "  BHMF_z0, BHMF_z20, BHBM_z0, BHBM_z20, HSMR_z0, etc."
+    echo "  BHMF_z0, BHMF_z20, BHBM, CSFRDH, HIMF, H2MF, MZR, SHMR, SMD"
     exit 1
 fi
 
