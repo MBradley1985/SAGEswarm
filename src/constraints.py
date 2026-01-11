@@ -26,7 +26,7 @@ logging.getLogger('constraints').setLevel(logging.INFO)
 GyrToYr = 1e9
 #######################
 # Binning configuration
-mupp = 11.5
+mupp = 12.0
 dm = 0.1
 mlow = 8
 mbins = np.arange(mlow, mupp, dm)
