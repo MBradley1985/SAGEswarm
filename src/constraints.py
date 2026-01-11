@@ -100,17 +100,18 @@ class Constraint(object):
         if not isinstance(self.snapshot, list):
             self.snapshot = [self.snapshot]
         
-        # For constraints that need multiple snapshots (like CSFRDH), we'll collect SFRD for each
+        # For constraints that need multiple snapshots (like CSFRDH and SMD), we'll collect SFRD and SMD for each
         Nage = 14
         num_snapshots = len(self.snapshot)
         SFRbyAge = np.zeros(num_snapshots)
+        SMD_history = np.zeros(num_snapshots) # [FIX] Array to store SMD history
         SnapshotTimes = np.zeros(num_snapshots)  # Store lookback time for each snapshot
         
         # For hist_smf, hist_bhmf, etc., always use the last (most recent) snapshot
         # This ensures SMF_z0 uses snapshot 63 even when combined with CSFRDH
         snap_to_use = self.snapshot[-1]
         
-        # Loop through snapshots to build SFRD history
+        # Loop through snapshots to build SFRD and SMD history
         for snap_idx, snap in enumerate(self.snapshot):
             if len(subvols) > 1:
                 subvols = ["multiple_batches"]
@@ -144,6 +145,10 @@ class Constraint(object):
             total_SFR = np.sum(G['SfrBulge'] + G['SfrDisk'])
             SFRbyAge[snap_idx] = total_SFR / self.vol  # Msun/yr/Mpc^3
             
+            # [FIX] Calculate SMD for THIS snapshot (for history constraints)
+            stellar_mass_total_snap = np.sum(G['StellarMass'] * 1e10 / self.h0)
+            SMD_history[snap_idx] = stellar_mass_total_snap / self.vol # Msun / Mpc^3
+
             # Store snapshot number to calculate time later (after alist is loaded)
             # We'll calculate the times after loading the alist properly below
             
@@ -214,13 +219,13 @@ class Constraint(object):
                 hist_h2mf_counts, _ = np.histogram(logH2, bins=mbins)
                 hist_h2mf = hist_h2mf_counts / dm / self.vol
 
-                # Calculate Stellar Mass Density (SMD)
-                stellar_mass_total = np.sum(G['StellarMass'] * 1e10 / self.h0)  # Total stellar mass in Msun
-                smd = stellar_mass_total / self.vol  # Msun / Mpc^3
+                # [FIX] smd is now calculated per snapshot above as SMD_history. 
+                # For compatibility, we can set a scalar 'smd' variable here for the last snapshot
+                # but we will return SMD_history.
+                smd_scalar = SMD_history[snap_idx] 
 
                 # Calculate Mass-Metallicity Relation (MZR)
                 # Z = log10((MetalsColdGas / ColdGas) / 0.02) + 9.0
-                # This gives 12 + log(O/H) assuming solar metallicity Z_sun = 0.02
                 w_mzr = np.where((G['ColdGas'] > 0) & (G['MetalsColdGas'] > 0) & (G['StellarMass'] > 0))[0]
                 if len(w_mzr) > 0:
                     metallicity = np.log10((G['MetalsColdGas'][w_mzr] / G['ColdGas'][w_mzr]) / 0.02) + 9.0
@@ -230,7 +235,6 @@ class Constraint(object):
                     stellar_mass_mzr = np.array([])
 
                 # Calculate Stellar-Halo Mass Relation (SHMR)
-                # Median stellar mass in halo mass bins
                 w_shmr = np.where((G['Mvir'] > 0) & (G['StellarMass'] > 0))[0]
                 if len(w_shmr) > 0:
                     halo_mass_shmr = np.log10(G['Mvir'][w_shmr] * 1e10 / self.h0)
@@ -336,27 +340,22 @@ class Constraint(object):
         #########################
         # take logs
         ind = (hist_smf > 0.)
-
         hist_smf[ind] = np.log10(hist_smf[ind])
         hist_smf[~ind] = -20
 
         ind = (hist_smf_red > 0.)
-
         hist_smf_red[ind] = np.log10(hist_smf_red[ind])
         hist_smf_red[~ind] = -20
 
         ind = (hist_smf_blue > 0.)
-
         hist_smf_blue[ind] = np.log10(hist_smf_blue[ind])
         hist_smf_blue[~ind] = -20
 
         ind = (hist_bhmf > 0.)
-
         hist_bhmf[ind] = np.log10(hist_bhmf[ind])
         hist_bhmf[~ind] = -20
 
         ind = (hist_himf > 0.)
-
         hist_himf[ind] = np.log10(hist_himf[ind])
         hist_himf[~ind] = -20
 
@@ -367,7 +366,6 @@ class Constraint(object):
         SFRD_Age = np.log10(SFRbyAge)
         SFRD_Age[~np.isfinite(SFRD_Age)] = -20
 
-        # have moved where this was in the code. Don't understand its purpose
         hist_bhmf = hist_bhmf[np.newaxis]
         hist_smf = hist_smf[np.newaxis]
         hist_smf_red = hist_smf_red[np.newaxis]
@@ -379,13 +377,11 @@ class Constraint(object):
         hist_h2mf = hist_h2mf[np.newaxis]
         hist_h2mf_err = hist_h2mf_err[np.newaxis]
 
-        # For CSFRDH, use SnapshotTimes; for others, calculate generic time bins
+        # [FIX] Return SMD_history instead of scalar 'smd'
         if num_snapshots > 1:
-            # CSFRDH case: use the snapshot times directly
-            return self.h0, self.Omega0, hist_smf, hist_bhmf, hist_himf, SnapshotTimes, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr
+            return self.h0, self.Omega0, hist_smf, hist_bhmf, hist_himf, SnapshotTimes, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, SMD_history, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr
         else:
-            # Other constraints: use the generic TimeBinEdge
-            return self.h0, self.Omega0, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr
+            return self.h0, self.Omega0, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, SMD_history, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr
 
 
     def load_observation(self, *args, **kwargs):
@@ -998,25 +994,29 @@ class H2MF(Constraint):
 class SMD(Constraint):
     """Stellar Mass Density constraint vs redshift"""
 
-    domain = (0.0, 12.0)  # Redshift range
-    z = [0]  # Will be updated based on snapshots
+    domain = (0.0, 12.0)
+    # <--- NEW: Include lower snapshot numbers (e.g., 10, 14, 18) to reach z > 4
+    z = [10, 14, 18, 23, 27, 32, 36, 40, 44, 48, 52, 56, 60, 63] 
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.snapshot = self.z
 
     def get_obs_x_y_err(self):
+        # ... (Keep your existing observation loading code) ...
         # Load SMD data from Weaver et al. 2023 (COSMOS2020)
         DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
-
+        
         # Read ECSV file - skip header lines
         with open(os.path.join(DATA_DIR, 'SMD.ecsv'), 'r') as f:
             lines = f.readlines()
 
-        # Find data start (after header)
         data_start = 0
         for i, line in enumerate(lines):
             if not line.startswith('#') and 'z rho' not in line:
                 data_start = i
                 break
 
-        # Parse data
         z_obs = []
         rho_50 = []
         rho_16 = []
@@ -1034,7 +1034,6 @@ class SMD(Constraint):
         rho_16 = np.array(rho_16)
         rho_84 = np.array(rho_84)
 
-        # Convert to log space
         log_rho = np.log10(rho_50)
         log_rho_16 = np.log10(rho_16)
         log_rho_84 = np.log10(rho_84)
@@ -1045,17 +1044,25 @@ class SMD(Constraint):
         return z_obs, log_rho, y_dn, y_up
 
     def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr):
-        # SMD is a single value at the current snapshot redshift
-        # For now, return the SMD value at the current redshift
-        # Note: This constraint works differently - it compares SMD vs redshift
-        # We return the redshift (from snapshot) and the SMD value
-        log_smd = np.log10(smd) if smd > 0 else -20
-        # The x value should be redshift, but we only have one snapshot
-        # This needs to be handled specially in the constraint system
-        x = np.array([0.0])  # Placeholder - actual redshift should come from snapshot
-        y = np.array([log_smd])
-        yerr = np.array([0.1])  # Approximate error
-        return x, y, yerr
+        # <--- NEW: 'smd' is now the SMD_history array from the loader
+        
+        # Calculate redshifts corresponding to the snapshots
+        alist_full = np.loadtxt(self.age_alist_file)
+        z_model = np.zeros(len(self.snapshot))
+        
+        for i, snap in enumerate(self.snapshot):
+            if snap < len(alist_full):
+                z_model[i] = 1.0 / alist_full[snap] - 1.0
+        
+        # Calculate log of SMD history
+        log_smd = np.zeros_like(smd)
+        valid = smd > 0
+        log_smd[valid] = np.log10(smd[valid])
+        log_smd[~valid] = -20
+        
+        yerr = np.zeros_like(log_smd) 
+        
+        return z_model, log_smd, yerr
 
     def get_sage_x_y(self):
         logm, phi = np.zeros(1), np.zeros(1)
