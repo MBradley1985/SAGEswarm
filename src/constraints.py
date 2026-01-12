@@ -32,11 +32,23 @@ mlow = 8
 mbins = np.arange(mlow, mupp, dm)
 xmf = mbins + dm/2.0
 
-mupp2 = 9.5
+mupp2 = 10.5
 dm2 = 0.1
-mlow2 = 6
+mlow2 = 4
 mbins2 = np.arange(mlow2,mupp2,dm2)
 xmf2 = mbins2 + dm2/2.0
+
+mupp_h1 = 11.0
+dm_h1 = 0.1
+mlow_h1 = 7
+mbins_h1 = np.arange(mlow_h1, mupp_h1, dm_h1)
+xmf_h1 = mbins_h1 + dm_h1/2.0
+
+mupp_h2 = 10
+dm_h2 = 0.1
+mlow_h2 = 8
+mbins_h2 = np.arange(mlow_h2,mupp_h2,dm_h2)
+xmf_h2 = mbins_h2 + dm_h2/2.0
 
 ssfrlow = -6
 ssfrupp = 4
@@ -53,9 +65,11 @@ zeros3 = lambda: np.zeros(shape=(1, len(mbins)))
 zeros4 = lambda: np.empty(shape=(1), dtype=np.bool_)
 zeros5 = lambda: np.zeros(shape=(1, len(ssfrbins)))
 zeros6 = lambda: np.zeros(shape=(1, len(mbins2)))
-zeros7 = lambda: np.zeros(shape=(1, len(mbins)))
-zeros8 = lambda: np.zeros(shape=(1, len(mbins)))
+zeros7 = lambda: np.zeros(shape=(1, len(mbins_h1)))
+zeros8 = lambda: np.zeros(shape=(1, len(mbins_h2)))
 zeros9 = lambda: np.zeros(shape=(1, len(mbins)))
+zeros10 = lambda: np.zeros(shape=(1, 3, len(xmf_h1)))
+zeros11 = lambda: np.zeros(shape=(1, 3, len(xmf_h2)))
 
 class Constraint(object):
     """Base classes for constraint objects"""
@@ -208,17 +222,16 @@ class Constraint(object):
                 logHI = np.log10(HI_mass)
                 logHI[~np.isfinite(logHI)] = -20
                 
-                hist_himf_counts, _ = np.histogram(logHI, bins=mbins)
-                hist_himf = hist_himf_counts / dm / self.vol
+                hist_himf_counts, _ = np.histogram(logHI, bins=mbins_h1)
+                hist_himf = hist_himf_counts / dm_h1 / self.vol
 
                 # Calculate H2MF (H2 Mass Function)
                 H2_mass = G['H2gas'] * 1e10 / self.h0  # Convert to Msun
                 logH2 = np.log10(H2_mass)
                 logH2[~np.isfinite(logH2)] = -20
 
-                hist_h2mf_counts, _ = np.histogram(logH2, bins=mbins)
-                hist_h2mf = hist_h2mf_counts / dm / self.vol
-
+                hist_h2mf_counts, _ = np.histogram(logH2, bins=mbins_h2)
+                hist_h2mf = hist_h2mf_counts / dm_h2 / self.vol
                 # [FIX] smd is now calculated per snapshot above as SMD_history. 
                 # For compatibility, we can set a scalar 'smd' variable here for the last snapshot
                 # but we will return SMD_history.
@@ -310,8 +323,8 @@ class Constraint(object):
         for i in range(len(hist_himf)):
             if hist_himf_counts[i] >= 1:
                 # Calculate error from Poisson statistics
-                phi_upper = (hist_himf_counts[i] + np.sqrt(hist_himf_counts[i])) / dm / self.vol
-                phi_lower = np.maximum((hist_himf_counts[i] - np.sqrt(hist_himf_counts[i])), 0.5) / dm / self.vol
+                phi_upper = (hist_himf_counts[i] + np.sqrt(hist_himf_counts[i])) / dm_h1 / self.vol
+                phi_lower = np.maximum((hist_himf_counts[i] - np.sqrt(hist_himf_counts[i])), 0.5) / dm_h1 / self.vol
                 if hist_himf[i] > 0:
                     # Symmetric error in log space (average of upper and lower)
                     err_up = np.log10(phi_upper) - np.log10(hist_himf[i])
@@ -326,8 +339,8 @@ class Constraint(object):
         hist_h2mf_err = np.zeros_like(hist_h2mf)
         for i in range(len(hist_h2mf)):
             if hist_h2mf_counts[i] >= 1:
-                phi_upper = (hist_h2mf_counts[i] + np.sqrt(hist_h2mf_counts[i])) / dm / self.vol
-                phi_lower = np.maximum((hist_h2mf_counts[i] - np.sqrt(hist_h2mf_counts[i])), 0.5) / dm / self.vol
+                phi_upper = (hist_h2mf_counts[i] + np.sqrt(hist_h2mf_counts[i])) / dm_h2 / self.vol
+                phi_lower = np.maximum((hist_h2mf_counts[i] - np.sqrt(hist_h2mf_counts[i])), 0.5) / dm_h2 / self.vol
                 if hist_h2mf[i] > 0:
                     err_up = np.log10(phi_upper) - np.log10(hist_h2mf[i])
                     err_dn = np.log10(hist_h2mf[i]) - np.log10(phi_lower)
@@ -528,7 +541,7 @@ class Constraint(object):
 class BHMF(Constraint):
     """Common logic for BHMF constraints"""
 
-    domain = (6, 9.5)
+    domain = (4, 10.5)
 
     def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr):
         y = hist_bhmf[0]
@@ -922,7 +935,7 @@ class BHBM(Constraint):
 class HIMF(Constraint):
     """The HI Mass Function constraint"""
 
-    domain = (8.5, 10.75)
+    domain = (7.0, 10.75)
     z = [0]
 
     def get_obs_x_y_err(self):
@@ -942,7 +955,7 @@ class HIMF(Constraint):
         y = hist_himf[0]
         yerr = hist_himf_err[0]
         ind = np.where(y < 0.)
-        return xmf[ind], y[ind], yerr[ind]
+        return xmf_h1[ind], y[ind], yerr[ind]
 
     def get_sage_x_y(self):
         # Placeholder - add SAGE HI MF data if available
@@ -979,7 +992,7 @@ class H2MF(Constraint):
         y = hist_h2mf[0]
         yerr = hist_h2mf_err[0]
         ind = np.where(y < 0.)
-        return xmf[ind], y[ind], yerr[ind]
+        return xmf_h2[ind], y[ind], yerr[ind]
 
     def get_sage_x_y(self):
         # Placeholder - no SAGE H2MF data available

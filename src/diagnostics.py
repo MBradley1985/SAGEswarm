@@ -147,6 +147,17 @@ def plot_pairplot_with_contours(space, pos, fx, cmap='plasma', hist_edgecolor='k
     
     return g
 
+def load_sage_history():
+    """Load SAGE history (CSFRDH/SMD)"""
+    try:
+        # Columns: Redshift, LookbackTime, logSFRD, logSMD
+        DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
+        data = np.loadtxt(os.path.join(DATA_DIR, 'sage_history.csv'), skiprows=1)
+        return data
+    except Exception as e:
+        print("Could not load sage_history.csv:", e)
+        return None
+
 def create_iteration_plot(filename, num_particles, num_iterations, obs_data, sage_data, track_folder, plot_type='SMF'):
     """
     Generic function to create iteration plots with customized settings per plot type.
@@ -310,34 +321,33 @@ def create_iteration_plot(filename, num_particles, num_iterations, obs_data, sag
         ax.plot(lowest_score_line[0], lowest_score_line[1], 'b-', linewidth=2.25, label='PSO Best Fit')
 
     # Add SHARK data if available
+    DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
     if plot_type == 'SMF' and 'SMF_z0_dump.txt' in filename:
-        mass, phi = load_observation('../data/SHARK_SMF.csv', cols=[0,1])
+        mass, phi = load_observation(os.path.join(DATA_DIR, 'SHARK_SMF.csv'), cols=[0,1])
         ax.plot(mass, transform_y(phi), 'g--', label='SHARK')
 
     elif plot_type == 'SMF' and 'SMF_z05_dump.txt' in filename:
-        mass, phi = load_observation('../data/SHARK_SMF.csv', cols=[2,3])
+        mass, phi = load_observation(os.path.join(DATA_DIR, 'SHARK_SMF.csv'), cols=[2,3])
         ax.plot(mass, transform_y(phi), 'g--', label='SHARK')
 
     elif plot_type == 'SMF' and 'SMF_z10_dump.txt' in filename:
-        mass, phi = load_observation('../data/SHARK_SMF.csv', cols=[4,5])
-        #print(mass, transform_y(phi))
+        mass, phi = load_observation(os.path.join(DATA_DIR, 'SHARK_SMF.csv'), cols=[4,5])
         ax.plot(mass, transform_y(phi), 'g--', label='SHARK')
 
     elif plot_type == 'SMF' and 'SMF_z20_dump.txt' in filename:
-        mass, phi = load_observation('../data/SHARK_SMF.csv', cols=[6,7])
-        #print(mass, transform_y(phi))
+        mass, phi = load_observation(os.path.join(DATA_DIR, 'SHARK_SMF.csv'), cols=[6,7])
         ax.plot(mass, transform_y(phi), 'g--', label='SHARK')
 
     elif plot_type == 'SMF' and 'SMF_z31_dump.txt' in filename:
-        mass, phi = load_observation('../data/SHARK_SMF.csv', cols=[8,9])
+        mass, phi = load_observation(os.path.join(DATA_DIR, 'SHARK_SMF.csv'), cols=[8,9])
         ax.plot(mass, transform_y(phi), 'g--', label='SHARK')
 
     elif plot_type == 'SMF' and 'SMF_z46_dump.txt' in filename:
-        mass, phi = load_observation('../data/SHARK_SMF.csv', cols=[10,11])
+        mass, phi = load_observation(os.path.join(DATA_DIR, 'SHARK_SMF.csv'), cols=[10,11])
         ax.plot(mass, transform_y(phi), 'g--', label='SHARK')
 
     elif plot_type == 'BHBM' and 'BHBM_z0_dump.txt' in filename:
-        mass, phi = load_observation('../data/SHARK_BHBM_z0.csv', cols=[0,1])
+        mass, phi = load_observation(os.path.join(DATA_DIR, 'SHARK_BHBM_z0.csv'), cols=[0,1])
         ax.plot(mass, phi, 'g--', label='SHARK')
 
         
@@ -574,7 +584,8 @@ def create_parameter_gif(param_matrix, param_names, output_path, scores=None, pa
 def load_sage_data():
     """Load SMF data from SAGE (Matched to main.py output)"""
     # We have 6 snapshots (z=0, 0.5, 1.0, 2.0, 3.0, 4.0) -> 12 Columns
-    sage_data = load_observation('../data/sage_smf_all_redshifts.csv', cols=list(range(12)))
+    DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
+    sage_data = load_observation(os.path.join(DATA_DIR, 'sage_smf_all_redshifts.csv'), cols=list(range(12)))
     
     data_by_z = {}
     
@@ -597,7 +608,8 @@ def load_sage_data():
 def load_sage_data_forBHMF():
     """Load BHMF data from SAGE (Matched to main.py output)"""
     # We have 6 snapshots (z=0, 0.5, 1.0, 2.0, 3.0, 4.0) -> 12 Columns
-    sage_data = load_observation('../data/sage_bhmf_all_redshifts.csv', cols=list(range(12)))
+    DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
+    sage_data = load_observation(os.path.join(DATA_DIR, 'sage_bhmf_all_redshifts.csv'), cols=list(range(12)))
     
     data_by_z = {}
     
@@ -615,14 +627,15 @@ def load_sage_data_forBHMF():
 
 def load_bhbm_data():
     """Load BHBM data from SAGE-miniUchuu and observations"""
+    DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
     # Load observational data from Haring & Rix 2004
-    blackholemass, bulgemass = load_observation('../data/Haring_Rix_2004_line.csv', cols=[2,3])
-    bulgemass_z2, blackholemass_z2 = load_observation('../data/Zhang_BHBM_z2.csv', cols=[0,1])
+    blackholemass, bulgemass = load_observation(os.path.join(DATA_DIR, 'Haring_Rix_2004_line.csv'), cols=[2,3])
+    bulgemass_z2, blackholemass_z2 = load_observation(os.path.join(DATA_DIR, 'Zhang_BHBM_z2.csv'), cols=[0,1])
     log_blackholemass = blackholemass
     log_bulgemass = bulgemass
-    
+
     # Load SAGE data
-    sage_bhbm_data = load_observation('../data/sage_bhbm_all_redshifts.csv', cols=[0,1,2,3,4,5,6,7,8,9,10,11])
+    sage_bhbm_data = load_observation(os.path.join(DATA_DIR, 'sage_bhbm_all_redshifts.csv'), cols=[0,1,2,3,4,5,6,7,8,9,10,11])
     
     # Dictionary to store data for each redshift
     data_by_z = {}
@@ -654,7 +667,8 @@ def load_bhbm_data():
 
 def load_shuntov_data():
     """Load SMF data from Shuntov et al. 2024"""
-    shuntov_data = load_observation('../data/shuntov_2024_all.csv', cols=[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,
+    DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
+    shuntov_data = load_observation(os.path.join(DATA_DIR, 'shuntov_2024_all.csv'), cols=[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,
                                                               15,16,17,18,19,20,21,22,23,24,25,26,27,28,29])
     # Dictionary to store data for each redshift
     data_by_z = {}
@@ -675,7 +689,8 @@ def load_shuntov_data():
 
 def load_zhang_data():
     """Load SMF data from Zhang et al. 2024"""
-    zhang_data = load_observation('../data/zhang_data.csv', cols=[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,
+    DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
+    zhang_data = load_observation(os.path.join(DATA_DIR, 'zhang_data.csv'), cols=[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,
                                                               15,16,17,18,19])
     # Dictionary to store data for each redshift
     data_by_z = {}
@@ -696,8 +711,8 @@ def load_zhang_data():
 
 def load_gama_data(config_opts):
     """Load GAMA data for z=0"""
-
-    logm, logphi, dlogphi = load_observation('../data/GAMA_SMF_highres.csv', cols=[0,1,2])
+    DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
+    logm, logphi, dlogphi = load_observation(os.path.join(DATA_DIR, 'GAMA_SMF_highres.csv'), cols=[0,1,2])
     
     # Use passed parameters
     cosmology_correction_median = np.log10(r.comoving_distance(0.079, 100*config_opts.h0, 0, config_opts.Omega0, 1.0-config_opts.Omega0) / 
@@ -712,8 +727,8 @@ def load_gama_data(config_opts):
 
 def load_ilbert_data(config_opts):
     """Load GAMA data for z=0"""
-
-    logm, logphi = load_observation('../data/Ilbert_2010_z1.csv', cols=[0,1])
+    DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
+    logm, logphi = load_observation(os.path.join(DATA_DIR, 'Ilbert_2010_z1.csv'), cols=[0,1])
     
     x_obs = logm
     y_obs = logphi
@@ -721,9 +736,9 @@ def load_ilbert_data(config_opts):
     return x_obs, y_obs, 'Ilbert et al., 2010'
 
 def load_wright_z1_data(config_opts):
-    """Load GAMA data for z=0"""
-
-    logm, logphi = load_observation('../data/Wright_2018_z1_z2.csv', cols=[0,1])
+    """Load Wright data for z=1"""
+    DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
+    logm, logphi = load_observation(os.path.join(DATA_DIR, 'Wright_2018_z1_z2.csv'), cols=[0,1])
     
     x_obs = logm
     y_obs = logphi
@@ -731,9 +746,9 @@ def load_wright_z1_data(config_opts):
     return x_obs, y_obs, 'Wright et al., 2018'
 
 def load_wright_z2_data(config_opts):
-    """Load GAMA data for z=0"""
-
-    logm, logphi = load_observation('../data/Wright_2018_z1_z2.csv', cols=[2,3])
+    """Load Wright data for z=2"""
+    DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
+    logm, logphi = load_observation(os.path.join(DATA_DIR, 'Wright_2018_z1_z2.csv'), cols=[2,3])
     
     x_obs = logm
     y_obs = logphi
@@ -924,10 +939,30 @@ def load_smd_obs_data():
         return (np.array([0.0, 2.0]), np.array([8.0, 7.5]), 'Weaver et al. 2023')
 
 
+def load_sage_himf_data():
+    """Load HIMF data from SAGE CSV file"""
+    try:
+        DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
+        himf_data = np.loadtxt(os.path.join(DATA_DIR, 'sage_himf_all_redshifts.csv'))
+        # z=0 data is in first two columns (mass, phi)
+        logm = himf_data[:, 0]
+        phi = himf_data[:, 1]
+        # Filter out NaN and zero/negative values
+        valid_mask = ~np.isnan(logm) & ~np.isnan(phi) & (phi > 0)
+        if np.sum(valid_mask) > 0:
+            return (logm[valid_mask], phi[valid_mask], 'SAGE')
+        else:
+            logger.warning("No valid HIMF SAGE data found")
+            return (np.array([9.0, 10.0]), np.array([1e-2, 1e-3]), 'SAGE')
+    except Exception as e:
+        logger.warning(f"Could not load sage_himf_all_redshifts.csv: {e}")
+        return (np.array([9.0, 10.0]), np.array([1e-2, 1e-3]), 'SAGE')
+
+
 def get_himf_files_map(config_opts):
     """Create mapping of HIMF dump files to their corresponding observational data"""
     obs_data = load_himf_obs_data()
-    sage_data = (np.array([9.0, 10.0]), np.array([1e-2, 1e-3]), 'SAGE')
+    sage_data = load_sage_himf_data()
 
     logger.info("Checking for HIMF dump files in directory...")
     files = {}
@@ -944,10 +979,30 @@ def get_himf_files_map(config_opts):
     return files
 
 
+def load_sage_h2mf_data():
+    """Load H2MF data from SAGE CSV file"""
+    try:
+        DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
+        h2mf_data = np.loadtxt(os.path.join(DATA_DIR, 'sage_h2mf_all_redshifts.csv'))
+        # z=0 data is in first two columns (mass, phi)
+        logm = h2mf_data[:, 0]
+        phi = h2mf_data[:, 1]
+        # Filter out NaN and zero/negative values
+        valid_mask = ~np.isnan(logm) & ~np.isnan(phi) & (phi > 0)
+        if np.sum(valid_mask) > 0:
+            return (logm[valid_mask], phi[valid_mask], 'SAGE')
+        else:
+            logger.warning("No valid H2MF SAGE data found")
+            return (np.array([9.0, 10.0]), np.array([1e-2, 1e-3]), 'SAGE')
+    except Exception as e:
+        logger.warning(f"Could not load sage_h2mf_all_redshifts.csv: {e}")
+        return (np.array([9.0, 10.0]), np.array([1e-2, 1e-3]), 'SAGE')
+
+
 def get_h2mf_files_map(config_opts):
     """Create mapping of H2MF dump files to their corresponding observational data"""
     obs_data = load_h2mf_obs_data()
-    sage_data = (np.array([9.0, 10.0]), np.array([1e-2, 1e-3]), 'SAGE')
+    sage_data = load_sage_h2mf_data()
 
     logger.info("Checking for H2MF dump files in directory...")
     files = {}
@@ -967,7 +1022,20 @@ def get_h2mf_files_map(config_opts):
 def get_mzr_files_map(config_opts):
     """Create mapping of MZR dump files to their corresponding observational data"""
     obs_data = load_mzr_obs_data()
-    sage_data = (np.array([9.0, 11.0]), np.array([8.5, 9.0]), 'SAGE')
+    # LOAD ACTUAL SAGE DATA
+    # We saved it as 'sage_mzr_all_redshifts.csv' in main.py
+    # Columns 0,1 correspond to z=0 (Snapshot 63, first in target_snapshots)
+    try:
+        DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
+        mzr_data = np.loadtxt(os.path.join(DATA_DIR, 'sage_mzr_all_redshifts.csv'))
+        x_sage = mzr_data[:, 0]  # log10(Mstellar)
+        y_sage = mzr_data[:, 1]  # 12+log(O/H)
+        # Filter out NaN values
+        valid = ~np.isnan(x_sage) & ~np.isnan(y_sage)
+        sage_data = (x_sage[valid], y_sage[valid], 'SAGE')
+    except Exception as e:
+        logger.warning(f"Could not load sage_mzr_all_redshifts.csv: {e}")
+        sage_data = (np.array([9.0, 11.0]), np.array([8.5, 9.0]), 'SAGE')
 
     logger.info("Checking for MZR dump files in directory...")
     files = {}
@@ -987,7 +1055,53 @@ def get_mzr_files_map(config_opts):
 def get_shmr_files_map(config_opts):
     """Create mapping of SHMR dump files to their corresponding observational data"""
     obs_data = load_shmr_obs_data()
-    sage_data = (np.array([12.0, 14.0]), np.array([10.0, 11.0]), 'SAGE')
+    
+    # LOAD ACTUAL SAGE DATA
+    # Use a robust loader to handle '' headers and whitespace
+    x_sage_vals = []
+    y_sage_vals = []
+    
+    # Resolve path to data directory
+    DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
+    sage_file = os.path.join(DATA_DIR, 'sage_halostellar_all_redshifts.csv')
+    
+    try:
+        if os.path.exists(sage_file):
+            with open(sage_file, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    # Skip empty lines, metadata headers like '', etc.
+                    if not line or line.startswith('[') or 'source:' in line:
+                        continue
+                    
+                    parts = line.split()
+                    if len(parts) < 2:
+                        continue
+                        
+                    try:
+                        # Columns 0 (Halo) and 1 (Stellar)
+                        val_x = float(parts[0])
+                        val_y = float(parts[1])
+                        
+                        # Only keep valid finite numbers
+                        if np.isfinite(val_x) and np.isfinite(val_y):
+                            x_sage_vals.append(val_x)
+                            y_sage_vals.append(val_y)
+                    except ValueError:
+                        continue
+                        
+            if len(x_sage_vals) > 0:
+                sage_data = (np.array(x_sage_vals), np.array(y_sage_vals), 'SAGE')
+            else:
+                logger.warning(f"File {sage_file} exists but no valid data found.")
+                sage_data = (np.array([12.0, 14.0]), np.array([10.0, 11.0]), 'SAGE (Empty)')
+        else:
+            logger.warning(f"SHMR SAGE file not found: {sage_file}")
+            sage_data = (np.array([12.0, 14.0]), np.array([10.0, 11.0]), 'SAGE (Missing)')
+
+    except Exception as e:
+        logger.warning(f"Could not load sage_halostellar_all_redshifts.csv: {e}")
+        sage_data = (np.array([12.0, 14.0]), np.array([10.0, 11.0]), 'SAGE (Error)')
 
     logger.info("Checking for SHMR dump files in directory...")
     files = {}
@@ -1007,7 +1121,17 @@ def get_shmr_files_map(config_opts):
 def get_smd_files_map(config_opts):
     """Create mapping of SMD dump files to their corresponding observational data"""
     obs_data = load_smd_obs_data()
-    sage_data = (np.array([0.0, 2.0]), np.array([8.0, 7.5]), 'SAGE')
+    # LOAD ACTUAL SAGE DATA
+    hist_data = load_sage_history()
+    if hist_data is not None:
+        # Col 0 is Redshift, Col 3 is logSMD
+        x_sage = hist_data[:, 0]  # Redshift
+        y_sage = hist_data[:, 3]  # logSMD
+        # Filter out invalid values (NaN and -99 placeholders)
+        valid = ~np.isnan(x_sage) & ~np.isnan(y_sage) & (y_sage > -50)
+        sage_data = (x_sage[valid], y_sage[valid], 'SAGE')
+    else:
+        sage_data = (np.array([0.0, 2.0]), np.array([8.0, 7.5]), 'SAGE')
 
     logger.info("Checking for SMD dump files in directory...")
     files = {}
@@ -1040,7 +1164,18 @@ def load_csfrdh_obs_data():
 def get_csfrdh_files_map(config_opts):
     """Create mapping of CSFRDH dump files to their corresponding observational data"""
     obs_data = load_csfrdh_obs_data()
-    sage_data = (np.array([0.0, 10.0]), np.array([-1.0, -2.0]), 'SAGE')
+    # LOAD ACTUAL SAGE DATA
+    hist_data = load_sage_history()
+    if hist_data is not None:
+        # Col 1 is Lookback Time, Col 2 is logSFRD
+        x_sage = hist_data[:, 1]  # Lookback Time
+        y_sage = hist_data[:, 2]  # logSFRD
+        # Filter out invalid values (NaN and -99 placeholders)
+        valid = ~np.isnan(x_sage) & ~np.isnan(y_sage) & (y_sage > -50)
+        sage_data = (x_sage[valid], y_sage[valid], 'SAGE')
+    else:
+        # Fallback only if file missing
+        sage_data = (np.array([0.0, 10.0]), np.array([-1.0, -2.0]), 'SAGE')
 
     logger.info("Checking for CSFRDH dump files in directory...")
     files = {}

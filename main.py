@@ -63,7 +63,7 @@ def get_required_snapshots(constraints_str):
         'H2MF': [63],
         'MZR': [63],
         'SHMR': [63],
-        'SMD': [63]
+        'SMD': [10, 14, 18, 23, 27, 32, 36, 40, 44, 48, 52, 56, 60, 63]
     }
     
     snapshots = set()
@@ -213,231 +213,349 @@ def main():
     print("\nStarting SAGE-PSO Main Program\n")
     print("="*60)
 
-    print(f"Checking for required SAGE output CSV files in {os.path.join(opts.outdir, 'data')}...")
+    print(f"Generating SAGE reference CSV files in {os.path.join(os.path.dirname(__file__), 'data')}...")
 
-    # --- Check for required sage_*.csv files ---
+    # --- Always regenerate sage_*.csv files from SAGE output ---
     required_csvs = [
         'sage_bhbm_all_redshifts.csv',
         'sage_bhmf_all_redshifts.csv',
         'sage_halostellar_all_redshifts.csv',
         'sage_smf_all_redshifts.csv',
-        'sage_smf_extra_redshifts.csv'
+        'sage_smf_extra_redshifts.csv',
+        'sage_himf_all_redshifts.csv',
+        'sage_h2mf_all_redshifts.csv',
+        'sage_mzr_all_redshifts.csv',
+        'sage_history.csv'
     ]
     data_dir = os.path.join(os.path.dirname(__file__), 'data')
     os.makedirs(data_dir, exist_ok=True)
-    
-    missing_csvs = [f for f in required_csvs if not os.path.exists(os.path.join(data_dir, f))]
-    
-    if missing_csvs:
-        print(f"Missing CSV files: {missing_csvs}\nChecking for existing SAGE output...")
-        
-        # 1. Parse OutputDir from .par file
-        output_dir = None
-        try:
-            with open(opts.config, 'r') as parfile:
-                for line in parfile:
-                    if line.strip().startswith('OutputDir'):
-                        output_dir = line.split()[1].strip()
-                        break
-        except Exception as e:
-            print(f"Error reading config file: {e}")
-            sys.exit(1)
-            
-        # 2. Check for existing HDF5 files
-        import subprocess
-        import h5py
-        import numpy as np
-        from scipy import stats
 
-        hdf5_files = []
+    # Always regenerate all CSV files
+    print("Regenerating all SAGE reference CSV files...")
+
+    # 1. Parse OutputDir from .par file
+    output_dir = None
+    try:
+        with open(opts.config, 'r') as parfile:
+            for line in parfile:
+                if line.strip().startswith('OutputDir'):
+                    output_dir = line.split()[1].strip()
+                    break
+    except Exception as e:
+        print(f"Error reading config file: {e}")
+        sys.exit(1)
+
+    # 2. Check for existing HDF5 files
+    import subprocess
+    import h5py
+    import numpy as np
+    from scipy import stats
+
+    hdf5_files = []
+    if output_dir and os.path.exists(output_dir):
+        hdf5_files = [os.path.join(output_dir, fname) for fname in os.listdir(output_dir)
+                      if fname.startswith('model_') and fname.endswith('.hdf5')]
+
+    # 3. Run SAGE only if HDF5 files are missing
+    if hdf5_files:
+        print(f"Found {len(hdf5_files)} existing HDF5 files in '{output_dir}'. Skipping SAGE binary run.")
+    else:
+        print(f"No existing HDF5 files found. Running SAGE to generate them...")
+
+        if output_dir and not os.path.exists(output_dir):
+            os.makedirs(output_dir, exist_ok=True)
+
+        print(f"Executing SAGE: {opts.sage_binary} {opts.config}")
+        sage_cmd = [opts.sage_binary, opts.config]
+        subprocess.run(sage_cmd, cwd=opts.outdir, check=True)
+
+        # Find the newly generated files
         if output_dir and os.path.exists(output_dir):
             hdf5_files = [os.path.join(output_dir, fname) for fname in os.listdir(output_dir)
                           if fname.startswith('model_') and fname.endswith('.hdf5')]
 
-        # 3. Run SAGE only if HDF5 files are missing
-        if hdf5_files:
-            print(f"Found {len(hdf5_files)} existing HDF5 files in '{output_dir}'. Skipping SAGE binary run.")
+    if not hdf5_files:
+        raise FileNotFoundError("No model_*.hdf5 files found (even after attempting SAGE run).")
+
+    # 4. Read Simulation Parameters & Detect Structure
+    print("Reading simulation parameters...")
+    with h5py.File(hdf5_files[0], 'r') as f:
+        # Detect Header
+        if 'Header' in f: header = f['Header'].attrs
+        elif 'Core_0' in f and 'Header' in f['Core_0']: header = f['Core_0']['Header'].attrs
+        else: header = {}
+
+        h = header.get('HubbleParam', opts.h0)
+        box = header.get('BoxSize', opts.boxsize)
+        n_files_total = header.get('NumFilesPerSnapshot', 1)
+        n_files_processed = len(hdf5_files)
+        vol_frac = n_files_processed / n_files_total
+
+        # Calculate Volume (Mpc^3)
+        volume = (box / h)**3 * vol_frac
+        print(f"  Volume: {volume:.2e} Mpc^3 (h={h}, Box={box}, Frac={vol_frac:.3f})")
+
+        # Detect Structure Type
+        top_keys = list(f.keys())
+        if any(k.startswith('Core_') for k in top_keys):
+            structure_type = 'core_level'
+        elif any(k.startswith('Snap_') for k in top_keys):
+            structure_type = 'snap_level'
         else:
-            print(f"No existing HDF5 files found. Running SAGE to generate them...")
-            
-            if output_dir and not os.path.exists(output_dir):
-                os.makedirs(output_dir, exist_ok=True)
+            raise ValueError("Unknown HDF5 structure")
 
-            print(f"Executing SAGE: {opts.sage_binary} {opts.config}")
-            sage_cmd = [opts.sage_binary, opts.config]
-            subprocess.run(sage_cmd, cwd=opts.outdir, check=True)
-            
-            # Find the newly generated files
-            if output_dir and os.path.exists(output_dir):
-                hdf5_files = [os.path.join(output_dir, fname) for fname in os.listdir(output_dir)
-                              if fname.startswith('model_') and fname.endswith('.hdf5')]
-        
-        if not hdf5_files:
-            raise FileNotFoundError("No model_*.hdf5 files found (even after attempting SAGE run).")
+    # 5. Define Target Snapshots (z=0, 0.5, 1.0, 2.0, 3.0, 4.0)
+    # Corresponds to Millennium snapshots: 63, 48, 40, 32, 27, 23
+    target_snapshots = [63, 48, 40, 32, 27, 23]
+    print(f"Target Snapshots: {target_snapshots}")
 
-        # 4. Read Simulation Parameters & Detect Structure
-        print("Reading simulation parameters...")
-        with h5py.File(hdf5_files[0], 'r') as f:
-            # Detect Header
-            if 'Header' in f: header = f['Header'].attrs
-            elif 'Core_0' in f and 'Header' in f['Core_0']: header = f['Core_0']['Header'].attrs
-            else: header = {}
+    # Snapshots for History (CSFRDH, SMD) - spanning z=0 to z~4
+    history_snapshots = [10, 14, 18, 23, 27, 32, 36, 40, 44, 48, 52, 56, 60, 63]
 
-            h = header.get('HubbleParam', opts.h0)
-            box = header.get('BoxSize', opts.boxsize)
-            n_files_total = header.get('NumFilesPerSnapshot', 1)
-            n_files_processed = len(hdf5_files)
-            vol_frac = n_files_processed / n_files_total
-            
-            # Calculate Volume (Mpc^3)
-            volume = (box / h)**3 * vol_frac
-            print(f"  Volume: {volume:.2e} Mpc^3 (h={h}, Box={box}, Frac={vol_frac:.3f})")
+    # Initialize Data Containers
+    smf_data_columns = []
+    bhmf_data_columns = []
+    bhbm_data_columns = []
+    halostellar_data_columns = []
+    mzr_data_columns = []
+    himf_data_columns = []
+    h2mf_data_columns = []
 
-            # Detect Structure Type
-            top_keys = list(f.keys())
-            if any(k.startswith('Core_') for k in top_keys):
-                structure_type = 'core_level'
-            elif any(k.startswith('Snap_') for k in top_keys):
-                structure_type = 'snap_level'
-            else:
-                raise ValueError("Unknown HDF5 structure")
+    # History Containers
+    history_z = []
+    history_t = []
+    history_sfrd = []
+    history_smd = []
 
-        # 5. Define Target Snapshots (z=0, 0.5, 1.0, 2.0, 3.0, 4.0)
-        # Corresponds to Millennium snapshots: 63, 48, 40, 32, 27, 23
-        target_snapshots = [63, 48, 40, 32, 27, 23]
-        print(f"Target Snapshots: {target_snapshots}")
+    # Define Bins
+    binwidth = 0.1
+    smf_bins = np.arange(6.0, 13.0, binwidth)
+    bhmf_bins = np.arange(5.0, 11.0, binwidth)
+    bhbm_bins = np.arange(8.0, 12.5, 0.2)
+    hs_bins = np.arange(9.0, 15.0, 0.2)
+    mzr_bins = np.arange(8.5, 11.5, 0.2)
+    himf_bins = np.arange(7.0, 11.5, binwidth)
+    h2mf_bins = np.arange(7.0, 11.0, binwidth)
 
-        # Initialize Data Containers
-        smf_data_columns = [] 
-        bhmf_data_columns = []
-        bhbm_data_columns = []
-        halostellar_data_columns = []
+    # 6. Process Specific Snapshots
+    for snap_num in target_snapshots:
+        snap_key = f"Snap_{snap_num}"
+        print(f"  Processing {snap_key}...")
 
-        # Define Bins
-        binwidth = 0.1
-        smf_bins = np.arange(6.0, 13.0, binwidth)
-        bhmf_bins = np.arange(5.0, 11.0, binwidth)
-        bhbm_bins = np.arange(8.0, 12.5, 0.2)
-        hs_bins = np.arange(9.0, 15.0, 0.2)
+        g_stellar = []
+        g_bhole = []
+        g_bulge = []
+        g_mvir = []
+        g_coldgas = []
+        g_metals = []
+        g_h2gas = []
 
-        # 6. Process Specific Snapshots
-        for snap_num in target_snapshots:
-            snap_key = f"Snap_{snap_num}"
-            print(f"  Processing {snap_key}...")
-            
-            g_stellar = []
-            g_bhole = []
-            g_bulge = []
-            g_mvir = []
-            
-            for file_path in hdf5_files:
-                with h5py.File(file_path, 'r') as f:
-                    def get_props(loc):
-                        s = np.array(loc['StellarMass']) * 1.0e10 / h if 'StellarMass' in loc else []
-                        bh = np.array(loc['BlackHoleMass']) * 1.0e10 / h if 'BlackHoleMass' in loc else []
-                        b = np.array(loc['BulgeMass']) * 1.0e10 / h if 'BulgeMass' in loc else []
-                        m = np.array(loc['CentralMvir']) * 1.0e10 / h if 'CentralMvir' in loc else \
-                            (np.array(loc['Mvir']) * 1.0e10 / h if 'Mvir' in loc else [])
-                        return s, bh, b, m
+        for file_path in hdf5_files:
+            with h5py.File(file_path, 'r') as f:
+                def get_props(loc):
+                    s = np.array(loc['StellarMass']) * 1.0e10 / h if 'StellarMass' in loc else []
+                    bh = np.array(loc['BlackHoleMass']) * 1.0e10 / h if 'BlackHoleMass' in loc else []
+                    b = np.array(loc['BulgeMass']) * 1.0e10 / h if 'BulgeMass' in loc else []
+                    m = np.array(loc['Mvir']) * 1.0e10 / h if 'Mvir' in loc else []
+                    cg = np.array(loc['ColdGas']) * 1.0e10 / h if 'ColdGas' in loc else []
+                    met = np.array(loc['MetalsColdGas']) * 1.0e10 / h if 'MetalsColdGas' in loc else []
+                    h2 = np.array(loc['H2gas']) * 1.0e10 / h if 'H2gas' in loc else []
+                    return s, bh, b, m, cg, met, h2
 
-                    if structure_type == 'core_level':
-                        for core in f.keys():
-                            if snap_key in f[core]:
-                                s, bh, b, m = get_props(f[core][snap_key])
-                                g_stellar.extend(s)
-                                g_bhole.extend(bh)
-                                g_bulge.extend(b)
-                                g_mvir.extend(m)
-                    else:
-                        if snap_key in f:
-                            s, bh, b, m = get_props(f[snap_key])
+                if structure_type == 'core_level':
+                    for core in f.keys():
+                        if snap_key in f[core]:
+                            s, bh, b, m, cg, met, h2 = get_props(f[core][snap_key])
                             g_stellar.extend(s)
                             g_bhole.extend(bh)
                             g_bulge.extend(b)
                             g_mvir.extend(m)
+                            g_coldgas.extend(cg)
+                            g_metals.extend(met)
+                            g_h2gas.extend(h2)
+                else:
+                    if snap_key in f:
+                        s, bh, b, m, cg, met, h2 = get_props(f[snap_key])
+                        g_stellar.extend(s)
+                        g_bhole.extend(bh)
+                        g_bulge.extend(b)
+                        g_mvir.extend(m)
+                        g_coldgas.extend(cg)
+                        g_metals.extend(met)
+                        g_h2gas.extend(h2)
 
-            g_stellar = np.array(g_stellar)
-            g_bhole = np.array(g_bhole)
-            g_bulge = np.array(g_bulge)
-            g_mvir = np.array(g_mvir)
+        g_stellar = np.array(g_stellar)
+        g_bhole = np.array(g_bhole)
+        g_bulge = np.array(g_bulge)
+        g_mvir = np.array(g_mvir)
+        g_coldgas = np.array(g_coldgas)
+        g_metals = np.array(g_metals)
+        g_h2gas = np.array(g_h2gas)
 
-            # --- SMF ---
-            valid = g_stellar > 0
+        # --- SMF ---
+        valid = g_stellar > 0
+        if np.sum(valid) > 0:
+            hist, edges = np.histogram(np.log10(g_stellar[valid]), bins=smf_bins)
+            phi = hist / (volume * binwidth)
+            centers = edges[:-1] + binwidth / 2
+            phi[phi == 0] = np.nan
+        else:
+            centers = smf_bins[:-1] + binwidth / 2
+            phi = np.zeros_like(centers)
+        smf_data_columns.extend([centers, phi])
+
+        # --- BHMF ---
+        valid = g_bhole > 0
+        if np.sum(valid) > 0:
+            hist, edges = np.histogram(np.log10(g_bhole[valid]), bins=bhmf_bins)
+            phi = hist / (volume * binwidth)
+            centers = edges[:-1] + binwidth / 2
+            phi[phi == 0] = np.nan
+        else:
+            centers = bhmf_bins[:-1] + binwidth / 2
+            phi = np.zeros_like(centers)
+        bhmf_data_columns.extend([centers, phi])
+
+        # --- BHBM ---
+        valid = (g_bulge > 0) & (g_bhole > 0)
+        if np.sum(valid) > 0:
+            x, y = np.log10(g_bulge[valid]), np.log10(g_bhole[valid])
+            median_y, _, _ = stats.binned_statistic(x, y, 'median', bins=bhbm_bins)
+            std_y, _, _ = stats.binned_statistic(x, y, 'std', bins=bhbm_bins)
+            count_y, edges, _ = stats.binned_statistic(x, y, 'count', bins=bhbm_bins)
+            centers = edges[:-1] + (edges[1] - edges[0])/2
+        else:
+            centers = bhbm_bins[:-1] + (bhbm_bins[1]-bhbm_bins[0])/2
+            median_y = np.full_like(centers, np.nan)
+            std_y = np.full_like(centers, np.nan)
+            count_y = np.zeros_like(centers)
+        bhbm_data_columns.extend([centers, median_y, std_y, count_y])
+
+        # --- Halo-Stellar (SHMR) ---
+        valid = (g_mvir > 0) & (g_stellar > 0)
+        if np.sum(valid) > 0:
+            x, y = np.log10(g_mvir[valid]), np.log10(g_stellar[valid])
+            median_y, _, _ = stats.binned_statistic(x, y, 'median', bins=hs_bins)
+            std_y, _, _ = stats.binned_statistic(x, y, 'std', bins=hs_bins)
+            count_y, edges, _ = stats.binned_statistic(x, y, 'count', bins=hs_bins)
+            centers = edges[:-1] + (edges[1] - edges[0])/2
+        else:
+            centers = hs_bins[:-1] + (hs_bins[1]-hs_bins[0])/2
+            median_y = np.full_like(centers, np.nan)
+            std_y = np.full_like(centers, np.nan)
+            count_y = np.zeros_like(centers)
+        halostellar_data_columns.extend([centers, median_y, std_y, count_y])
+
+        # --- MZR (Mass-Metallicity) ---
+        if len(g_coldgas) > 0:
+            valid = (g_coldgas > 0) & (g_stellar > 0) & (g_metals > 0)
             if np.sum(valid) > 0:
-                hist, edges = np.histogram(np.log10(g_stellar[valid]), bins=smf_bins)
+                Z = np.log10((g_metals[valid] / g_coldgas[valid]) / 0.02) + 9.0
+                logM = np.log10(g_stellar[valid])
+                median_Z, _, _ = stats.binned_statistic(logM, Z, 'median', bins=mzr_bins)
+                centers = mzr_bins[:-1] + (mzr_bins[1] - mzr_bins[0])/2
+            else:
+                centers = mzr_bins[:-1] + (mzr_bins[1] - mzr_bins[0])/2
+                median_Z = np.full_like(centers, np.nan)
+            mzr_data_columns.extend([centers, median_Z])
+
+        # --- HIMF (HI Mass Function) ---
+        if len(g_coldgas) > 0 and len(g_h2gas) > 0:
+            g_hi = g_coldgas - g_h2gas
+            valid = g_hi > 0
+            if np.sum(valid) > 0:
+                hist, edges = np.histogram(np.log10(g_hi[valid]), bins=himf_bins)
                 phi = hist / (volume * binwidth)
                 centers = edges[:-1] + binwidth / 2
-                # Replace Zeros with NaN
                 phi[phi == 0] = np.nan
             else:
-                centers = smf_bins[:-1] + binwidth / 2
-                phi = np.zeros_like(centers)
-            smf_data_columns.extend([centers, phi])
+                centers = himf_bins[:-1] + binwidth / 2
+                phi = np.full_like(centers, np.nan)
+        else:
+            centers = himf_bins[:-1] + binwidth / 2
+            phi = np.full_like(centers, np.nan)
+        himf_data_columns.extend([centers, phi])
 
-            # --- BHMF ---
-            valid = g_bhole > 0
+        # --- H2MF (H2 Mass Function) ---
+        if len(g_h2gas) > 0:
+            valid = g_h2gas > 0
             if np.sum(valid) > 0:
-                hist, edges = np.histogram(np.log10(g_bhole[valid]), bins=bhmf_bins)
+                hist, edges = np.histogram(np.log10(g_h2gas[valid]), bins=h2mf_bins)
                 phi = hist / (volume * binwidth)
                 centers = edges[:-1] + binwidth / 2
-                # Replace Zeros with NaN
                 phi[phi == 0] = np.nan
             else:
-                centers = bhmf_bins[:-1] + binwidth / 2
-                phi = np.zeros_like(centers)
-            bhmf_data_columns.extend([centers, phi])
+                centers = h2mf_bins[:-1] + binwidth / 2
+                phi = np.full_like(centers, np.nan)
+        else:
+            centers = h2mf_bins[:-1] + binwidth / 2
+            phi = np.full_like(centers, np.nan)
+        h2mf_data_columns.extend([centers, phi])
 
-            # --- BHBM ---
-            valid = (g_bulge > 0) & (g_bhole > 0)
-            if np.sum(valid) > 0:
-                x, y = np.log10(g_bulge[valid]), np.log10(g_bhole[valid])
-                mean_y, _, _ = stats.binned_statistic(x, y, 'mean', bins=bhbm_bins)
-                std_y, _, _ = stats.binned_statistic(x, y, 'std', bins=bhbm_bins)
-                count_y, edges, _ = stats.binned_statistic(x, y, 'count', bins=bhbm_bins)
-                centers = edges[:-1] + (edges[1] - edges[0])/2
+    # --- 6b. Process History Snapshots (CSFRDH & SMD) ---
+    print(f"  Processing History ({len(history_snapshots)} snapshots)...")
+    from src import routines as r
 
-            else:
-                centers = bhbm_bins[:-1] + (bhbm_bins[1]-bhbm_bins[0])/2
-                mean_y = np.full_like(centers, np.nan)
-                std_y = np.full_like(centers, np.nan)
-                count_y = np.zeros_like(centers)
+    for snap_num in history_snapshots:
+        snap_key = f"Snap_{snap_num}"
+        total_sfr = 0.0
+        total_sm = 0.0
+        current_z = -1.0
 
-            bhbm_data_columns.extend([centers, mean_y, std_y, count_y])
+        for file_path in hdf5_files:
+            with h5py.File(file_path, 'r') as f:
+                if structure_type == 'core_level':
+                    first_core = [k for k in f.keys() if k.startswith('Core_')][0]
+                    if snap_key in f[first_core]:
+                        # Read redshift directly from snapshot attributes
+                        current_z = f[first_core][snap_key].attrs.get('redshift', -1.0)
+                        for core in f.keys():
+                            if core.startswith('Core_') and snap_key in f[core]:
+                                loc = f[core][snap_key]
+                                if 'SfrDisk' in loc: total_sfr += np.sum(loc['SfrDisk'])
+                                if 'SfrBulge' in loc: total_sfr += np.sum(loc['SfrBulge'])
+                                if 'StellarMass' in loc: total_sm += np.sum(loc['StellarMass']) * 1.0e10 / h
+                else:
+                    if snap_key in f:
+                        loc = f[snap_key]
+                        current_z = loc.attrs.get('redshift', -1.0)
+                        if 'SfrDisk' in loc: total_sfr += np.sum(loc['SfrDisk'])
+                        if 'SfrBulge' in loc: total_sfr += np.sum(loc['SfrBulge'])
+                        if 'StellarMass' in loc: total_sm += np.sum(loc['StellarMass']) * 1.0e10 / h
 
-            # --- Halo-Stellar ---
-            valid = (g_mvir > 0) & (g_stellar > 0)
-            if np.sum(valid) > 0:
-                x, y = np.log10(g_mvir[valid]), np.log10(g_stellar[valid])
-                mean_y, _, _ = stats.binned_statistic(x, y, 'mean', bins=hs_bins)
-                std_y, _, _ = stats.binned_statistic(x, y, 'std', bins=hs_bins)
-                count_y, edges, _ = stats.binned_statistic(x, y, 'count', bins=hs_bins)
-                centers = edges[:-1] + (edges[1] - edges[0])/2
-            else:
-                centers = hs_bins[:-1] + (hs_bins[1]-hs_bins[0])/2
-                mean_y = np.full_like(centers, np.nan)
-                std_y = np.full_like(centers, np.nan)
-                count_y = np.zeros_like(centers)
+        if current_z >= 0:
+            z = current_z
+            tL = r.z2tL(z, h, opts.Omega0, 1.0-opts.Omega0)
+        else:
+            z = 0; tL = 0
 
-            halostellar_data_columns.extend([centers, mean_y, std_y, count_y])
+        history_z.append(z)
+        history_t.append(tL)
+        history_sfrd.append(np.log10(total_sfr / volume) if total_sfr > 0 else -99)
+        history_smd.append(np.log10(total_sm / volume) if total_sm > 0 else -99)
 
-        # --- Write Files ---
-        def write_wide_csv(filename, columns):
-            if not columns: return
-            path = os.path.join(data_dir, filename)
-            data_matrix = np.column_stack(columns)
-            np.savetxt(path, data_matrix, delimiter='\t', fmt='%.6e')
-            print(f"Generated {path}")
+    # --- Write All CSV Files (always regenerate) ---
+    def write_wide_csv(filename, columns):
+        if not columns: return
+        path = os.path.join(data_dir, filename)
+        data_matrix = np.column_stack(columns)
+        np.savetxt(path, data_matrix, delimiter='\t', fmt='%.6e')
+        print(f"Generated {path}")
 
-        if 'sage_smf_all_redshifts.csv' in missing_csvs:
-            write_wide_csv('sage_smf_all_redshifts.csv', smf_data_columns)
-        if 'sage_smf_extra_redshifts.csv' in missing_csvs:
-            write_wide_csv('sage_smf_extra_redshifts.csv', smf_data_columns)
-        if 'sage_bhmf_all_redshifts.csv' in missing_csvs:
-            write_wide_csv('sage_bhmf_all_redshifts.csv', bhmf_data_columns)
-        if 'sage_bhbm_all_redshifts.csv' in missing_csvs:
-            write_wide_csv('sage_bhbm_all_redshifts.csv', bhbm_data_columns)
-        if 'sage_halostellar_all_redshifts.csv' in missing_csvs:
-            write_wide_csv('sage_halostellar_all_redshifts.csv', halostellar_data_columns)
+    write_wide_csv('sage_smf_all_redshifts.csv', smf_data_columns)
+    write_wide_csv('sage_smf_extra_redshifts.csv', smf_data_columns)
+    write_wide_csv('sage_bhmf_all_redshifts.csv', bhmf_data_columns)
+    write_wide_csv('sage_bhbm_all_redshifts.csv', bhbm_data_columns)
+    write_wide_csv('sage_halostellar_all_redshifts.csv', halostellar_data_columns)
+    write_wide_csv('sage_mzr_all_redshifts.csv', mzr_data_columns)
+    write_wide_csv('sage_himf_all_redshifts.csv', himf_data_columns)
+    write_wide_csv('sage_h2mf_all_redshifts.csv', h2mf_data_columns)
+
+    # Write History File (Z, Time, SFRD, SMD)
+    hist_data = np.column_stack((history_z, history_t, history_sfrd, history_smd))
+    np.savetxt(os.path.join(data_dir, 'sage_history.csv'), hist_data,
+            delimiter='\t', header='Redshift\tLookbackTime\tlogSFRD\tlogSMD', comments='')
+    print(f"Generated {os.path.join(data_dir, 'sage_history.csv')}")
 
     # Determine snapshots needed for constraints
     if opts.snapshot is not None:
