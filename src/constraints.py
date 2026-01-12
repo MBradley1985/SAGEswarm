@@ -194,8 +194,14 @@ class Constraint(object):
                 # calculate all
                 w = np.where(smass > 0.0)[0]
                 mass = np.log10(smass[w])
-                sSFR = np.log10( (SfrDisk[w] + SfrBulge[w]) / StellarMass[w] )
-                
+                # sSFR = SFR / M_stellar, so log(sSFR) = log(SFR) - log(M)
+                # Use smass (linear) not StellarMass (which is already log)
+                total_sfr = SfrDisk[w] + SfrBulge[w]
+                # Handle zero SFR by setting to very low sSFR
+                sSFR = np.full(len(w), -20.0)  # default to very low (quiescent)
+                sfr_positive = total_sfr > 0
+                sSFR[sfr_positive] = np.log10(total_sfr[sfr_positive] / smass[w][sfr_positive])
+
                 # additionally calculate red (sSFR < -11 is quiescent/red)
                 w_red = np.where(sSFR < sSFRcut)[0]
                 massRED = mass[w_red]
@@ -861,10 +867,8 @@ class SMF_Red_z0(SMF_Red):
     def get_obs_x_y_err(self):
         # Load GAMA morphological SMF data
         # E_HE = Elliptical + High-mass Early-type (Red/Quiescent)
-        gama = self.load_observation('../data/gama_smf_morph.ecsv', cols=[0,1,2])
-        gama_mass = gama[:, 0]  # log stellar mass
-        gama_E_HE = gama[:, 1]  # log phi for E+HE (red)
-        gama_E_HE_err = gama[:, 2]  # error
+        # skiprows=15 to skip 14 comment lines + 1 header row in the ECSV file
+        gama_mass, gama_E_HE, gama_E_HE_err = self.load_observation('../data/gama_smf_morph.ecsv', cols=[0,1,2], skiprows=15)
 
         # Filter out NaN values
         valid = ~np.isnan(gama_E_HE)
@@ -902,10 +906,8 @@ class SMF_Blue_z0(SMF_Blue):
     def get_obs_x_y_err(self):
         # Load GAMA morphological SMF data
         # D = Disk (Blue/Star-forming)
-        gama = self.load_observation('../data/gama_smf_morph.ecsv', cols=[0,7,8])
-        gama_mass = gama[:, 0]  # log stellar mass
-        gama_D = gama[:, 1]  # log phi for D (blue)
-        gama_D_err = gama[:, 2]  # error
+        # skiprows=15 to skip 14 comment lines + 1 header row in the ECSV file
+        gama_mass, gama_D, gama_D_err = self.load_observation('../data/gama_smf_morph.ecsv', cols=[0,7,8], skiprows=15)
 
         # Filter out NaN values
         valid = ~np.isnan(gama_D)

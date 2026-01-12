@@ -756,9 +756,8 @@ def load_ilbert_data(config_opts):
 def load_gama_red_data(config_opts):
     """Load GAMA morphological SMF data for Red/Quiescent (E+HE) galaxies at z=0"""
     DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
-    gama = load_observation(os.path.join(DATA_DIR, 'gama_smf_morph.ecsv'), cols=[0,1,2])
-    gama_mass = gama[0]  # log stellar mass
-    gama_E_HE = gama[1]  # log phi for E+HE (red)
+    # skiprows=15 to skip 14 comment lines + 1 header row in the ECSV file
+    gama_mass, gama_E_HE, _ = np.loadtxt(os.path.join(DATA_DIR, 'gama_smf_morph.ecsv'), usecols=[0,1,2], unpack=True, skiprows=15)
 
     # Filter out NaN values
     valid = ~np.isnan(gama_E_HE)
@@ -770,9 +769,8 @@ def load_gama_red_data(config_opts):
 def load_gama_blue_data(config_opts):
     """Load GAMA morphological SMF data for Blue/Star-forming (D) galaxies at z=0"""
     DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
-    gama = load_observation(os.path.join(DATA_DIR, 'gama_smf_morph.ecsv'), cols=[0,7,8])
-    gama_mass = gama[0]  # log stellar mass
-    gama_D = gama[1]  # log phi for D (blue)
+    # skiprows=15 to skip 14 comment lines + 1 header row in the ECSV file
+    gama_mass, gama_D, _ = np.loadtxt(os.path.join(DATA_DIR, 'gama_smf_morph.ecsv'), usecols=[0,7,8], unpack=True, skiprows=15)
 
     # Filter out NaN values
     valid = ~np.isnan(gama_D)

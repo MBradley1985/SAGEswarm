@@ -171,10 +171,10 @@ def parse_args(requires_observations=True):
         ret.append(opts.obs_dir)
     return ret
 
-def load_observation(obsdir, fname, cols):
+def load_observation(obsdir, fname, cols, skiprows=0):
     fname = os.path.join(obsdir, fname)
     print("Loading observations from %s" % fname)
-    return np.loadtxt(fname, usecols=cols, unpack=True)
+    return np.loadtxt(fname, usecols=cols, unpack=True, skiprows=skiprows)
 
 def prepare_ax(ax, xmin, xmax, ymin, ymax, xtit, ytit, locators=(1, 1, 1, 1), fontsize=13):
 
