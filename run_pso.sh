@@ -8,10 +8,10 @@
 CONFIG_PATH="../SAGE26/input/millennium.par"
 BASE_PATH="../SAGE26/sage"
 OUTPUT_PATH="../SAGE26/output/millennium_pso"
-PARTICLES=16
-ITERATIONS=100
+PARTICLES=4
+ITERATIONS=10
 TEST="chi2"
-CONSTRAINTS="SMF_z0,BHBM,CSFRDH,HIMF,BHMF_z0,SMD,H2MF,SHMR,MZR"
+CONSTRAINTS="HIMF"
 AGE_ALIST_FILE_MINI_UCHUU='../simulations/uchuu_suite/miniuchuu/mergertrees/u400_planck2016_50.a_list'
 AGE_ALIST_FILE_MINI_MILLENNIUM="../SAGE26/input/millennium/trees/millennium.a_list"
 BOXSIZE=62.5

@@ -173,6 +173,24 @@ def create_iteration_plot(filename, num_particles, num_iterations, obs_data, sag
             'legend_loc': 'lower left',
             'transform_y': lambda y: 10**np.array(y)
         },
+        'SMF_Red': {
+            'xlabel': r'$\log_{10} M_{\mathrm{stars}}\ (M_{\odot})$',
+            'ylabel': r'$\phi\ (\mathrm{Mpc}^{-3}\ \mathrm{dex}^{-1})$',
+            'xlim': [8.0, 12.2],
+            'ylim': [1.0e-6, 1.0e-1],
+            'yscale': 'log',
+            'legend_loc': 'lower left',
+            'transform_y': lambda y: 10**np.array(y)
+        },
+        'SMF_Blue': {
+            'xlabel': r'$\log_{10} M_{\mathrm{stars}}\ (M_{\odot})$',
+            'ylabel': r'$\phi\ (\mathrm{Mpc}^{-3}\ \mathrm{dex}^{-1})$',
+            'xlim': [8.0, 12.2],
+            'ylim': [1.0e-6, 1.0e-1],
+            'yscale': 'log',
+            'legend_loc': 'lower left',
+            'transform_y': lambda y: 10**np.array(y)
+        },
         'BHMF': {
             'xlabel': r'$\log_{10} M_{\mathrm{bh}}\ (M_{\odot})$',
             'ylabel': r'$\phi\ (\mathrm{Mpc}^{-3}\ \mathrm{dex}^{-1})$',
@@ -252,7 +270,7 @@ def create_iteration_plot(filename, num_particles, num_iterations, obs_data, sag
     x_sage, y_sage, sage_label = sage_data
     
     # Convert y values based on plot type
-    if plot_type in ['SMF', 'BHMF', 'HIMF', 'H2MF']:
+    if plot_type in ['SMF', 'SMF_Red', 'SMF_Blue', 'BHMF', 'HIMF', 'H2MF']:
         y_obs_converted = [10**y for y in y_obs]
         y_sage_converted = y_sage # Changed this line
     else:
@@ -729,11 +747,67 @@ def load_ilbert_data(config_opts):
     """Load GAMA data for z=0"""
     DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
     logm, logphi = load_observation(os.path.join(DATA_DIR, 'Ilbert_2010_z1.csv'), cols=[0,1])
-    
+
     x_obs = logm
     y_obs = logphi
-    
+
     return x_obs, y_obs, 'Ilbert et al., 2010'
+
+def load_gama_red_data(config_opts):
+    """Load GAMA morphological SMF data for Red/Quiescent (E+HE) galaxies at z=0"""
+    DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
+    gama = load_observation(os.path.join(DATA_DIR, 'gama_smf_morph.ecsv'), cols=[0,1,2])
+    gama_mass = gama[0]  # log stellar mass
+    gama_E_HE = gama[1]  # log phi for E+HE (red)
+
+    # Filter out NaN values
+    valid = ~np.isnan(gama_E_HE)
+    x_obs = gama_mass[valid]
+    y_obs = gama_E_HE[valid]
+
+    return x_obs, y_obs, 'GAMA E+HE (Red)'
+
+def load_gama_blue_data(config_opts):
+    """Load GAMA morphological SMF data for Blue/Star-forming (D) galaxies at z=0"""
+    DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
+    gama = load_observation(os.path.join(DATA_DIR, 'gama_smf_morph.ecsv'), cols=[0,7,8])
+    gama_mass = gama[0]  # log stellar mass
+    gama_D = gama[1]  # log phi for D (blue)
+
+    # Filter out NaN values
+    valid = ~np.isnan(gama_D)
+    x_obs = gama_mass[valid]
+    y_obs = gama_D[valid]
+
+    return x_obs, y_obs, 'GAMA Disk (Blue)'
+
+def load_sage_smf_red_data():
+    """Load SAGE Red SMF data"""
+    DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
+    sage_data = load_observation(os.path.join(DATA_DIR, 'sage_smf_red_all_redshifts.csv'), cols=[0,1])
+
+    data_by_z = {}
+    # z=0 is columns 0,1
+    logm = sage_data[0]
+    phi = sage_data[1]
+    valid_mask = ~np.isnan(logm) & ~np.isnan(phi) & (phi > 0)
+    data_by_z[0.0] = (logm[valid_mask], phi[valid_mask], 'SAGE Red (z=0)')
+
+    return data_by_z
+
+def load_sage_smf_blue_data():
+    """Load SAGE Blue SMF data"""
+    DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
+    sage_data = load_observation(os.path.join(DATA_DIR, 'sage_smf_blue_all_redshifts.csv'), cols=[0,1])
+
+    data_by_z = {}
+    # z=0 is columns 0,1
+    logm = sage_data[0]
+    phi = sage_data[1]
+    valid_mask = ~np.isnan(logm) & ~np.isnan(phi) & (phi > 0)
+    data_by_z[0.0] = (logm[valid_mask], phi[valid_mask], 'SAGE Blue (z=0)')
+
+    return data_by_z
 
 def load_wright_z1_data(config_opts):
     """Load Wright data for z=1"""
@@ -813,6 +887,44 @@ def get_smf_files_map(config_opts):
     
     logger.info(f"Found {len(smf_files)} SMF files to process")
     return smf_files
+
+def get_smf_red_files_map(config_opts):
+    """Create mapping of SMF Red dump files to their corresponding observational data"""
+    gama_red_data = load_gama_red_data(config_opts)
+    sage_red_data = load_sage_smf_red_data()
+
+    logger.info("Checking for SMF_Red dump files in directory...")
+    smf_red_files = {}
+
+    filename = 'SMF_Red_z0_dump.txt'
+    filepath = os.path.join(config_opts.outdir, filename)
+    if os.path.exists(filepath):
+        logger.info(f"Found: {filename}")
+        smf_red_files[filename] = (gama_red_data, sage_red_data[0.0])
+    else:
+        logger.info(f"Not found: {filename}")
+
+    logger.info(f"Found {len(smf_red_files)} SMF_Red files to process")
+    return smf_red_files
+
+def get_smf_blue_files_map(config_opts):
+    """Create mapping of SMF Blue dump files to their corresponding observational data"""
+    gama_blue_data = load_gama_blue_data(config_opts)
+    sage_blue_data = load_sage_smf_blue_data()
+
+    logger.info("Checking for SMF_Blue dump files in directory...")
+    smf_blue_files = {}
+
+    filename = 'SMF_Blue_z0_dump.txt'
+    filepath = os.path.join(config_opts.outdir, filename)
+    if os.path.exists(filepath):
+        logger.info(f"Found: {filename}")
+        smf_blue_files[filename] = (gama_blue_data, sage_blue_data[0.0])
+    else:
+        logger.info(f"Not found: {filename}")
+
+    logger.info(f"Found {len(smf_blue_files)} SMF_Blue files to process")
+    return smf_blue_files
 
 def get_bhmf_files_map(config_opts):
     """Create mapping of BHMF dump files to their corresponding observational data"""
@@ -1353,6 +1465,12 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
     smf_files = get_smf_files_map(config_opts)
     logger.info(f"Found {len(smf_files)} SMF files to process")
 
+    smf_red_files = get_smf_red_files_map(config_opts)
+    logger.info(f"Found {len(smf_red_files)} SMF_Red files to process")
+
+    smf_blue_files = get_smf_blue_files_map(config_opts)
+    logger.info(f"Found {len(smf_blue_files)} SMF_Blue files to process")
+
     bhmf_files = get_bhmf_files_map(config_opts)
     logger.info(f"Found {len(bhmf_files)} BHMF files to process")
 
@@ -1408,6 +1526,72 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
         logger.info("Warning: No SMF files were found to process!")
         logger.info(f"Expected files in: {output_dir}")
         logger.info("Expected files: %s", list(smf_files.keys()))
+
+    # Process SMF_Red files
+    processed_any_smf_red = False
+    for filename, (obs_data, sage_data) in smf_red_files.items():
+        filepath = os.path.join(output_dir, filename)
+
+        if os.path.exists(filepath):
+            logger.info(f"\nProcessing {filename}...")
+            processed_any_smf_red = True
+
+            # Create iteration plot
+            try:
+                logger.info("Creating iteration plot...")
+                fig = create_iteration_plot(
+                    filepath,
+                    num_particles,
+                    num_iterations,
+                    obs_data,
+                    sage_data,
+                    tracks_dir,
+                    plot_type='SMF_Red'
+                )
+                outfile = os.path.join(output_dir, f'{os.path.splitext(filename)[0]}_all.pdf')
+                fig.savefig(outfile, dpi=300)
+                logger.info(f"Saved iteration plot to {outfile}")
+                plt.close(fig)
+            except Exception as e:
+                logger.error(f"Error creating iteration plot: {str(e)}")
+
+    if not processed_any_smf_red:
+        logger.info("Warning: No SMF_Red files were found to process!")
+        logger.info(f"Expected files in: {output_dir}")
+        logger.info("Expected files: %s", list(smf_red_files.keys()))
+
+    # Process SMF_Blue files
+    processed_any_smf_blue = False
+    for filename, (obs_data, sage_data) in smf_blue_files.items():
+        filepath = os.path.join(output_dir, filename)
+
+        if os.path.exists(filepath):
+            logger.info(f"\nProcessing {filename}...")
+            processed_any_smf_blue = True
+
+            # Create iteration plot
+            try:
+                logger.info("Creating iteration plot...")
+                fig = create_iteration_plot(
+                    filepath,
+                    num_particles,
+                    num_iterations,
+                    obs_data,
+                    sage_data,
+                    tracks_dir,
+                    plot_type='SMF_Blue'
+                )
+                outfile = os.path.join(output_dir, f'{os.path.splitext(filename)[0]}_all.pdf')
+                fig.savefig(outfile, dpi=300)
+                logger.info(f"Saved iteration plot to {outfile}")
+                plt.close(fig)
+            except Exception as e:
+                logger.error(f"Error creating iteration plot: {str(e)}")
+
+    if not processed_any_smf_blue:
+        logger.info("Warning: No SMF_Blue files were found to process!")
+        logger.info(f"Expected files in: {output_dir}")
+        logger.info("Expected files: %s", list(smf_blue_files.keys()))
 
     # Process BHMF files
     processed_any_bhmf = False

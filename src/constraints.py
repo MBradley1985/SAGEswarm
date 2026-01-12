@@ -40,7 +40,7 @@ xmf2 = mbins2 + dm2/2.0
 
 mupp_h1 = 11.0
 dm_h1 = 0.1
-mlow_h1 = 7
+mlow_h1 = 8
 mbins_h1 = np.arange(mlow_h1, mupp_h1, dm_h1)
 xmf_h1 = mbins_h1 + dm_h1/2.0
 
@@ -55,7 +55,7 @@ ssfrupp = 4
 dssfr = 0.2
 ssfrbins = np.arange(ssfrlow,ssfrupp,dssfr)
 
-Nmin = 5 # minimum number of galaxies expected in a mass bin for the simulation volume, based on observations, to warrant fitting to that bin for mass functions
+Nmin = 10 # minimum number of galaxies expected in a mass bin for the simulation volume, based on observations, to warrant fitting to that bin for mass functions
 
 # These are two easily create variables of these different shapes without
 # actually storing a reference ourselves; we don't need it
@@ -131,7 +131,7 @@ class Constraint(object):
                 subvols = ["multiple_batches"]
 
             seed(2222)
-            fields = ['StellarMass', 'BlackHoleMass', 'Len', 'SfrBulge', 'BulgeMass', 'Mvir', 'SfrDisk', 'ColdGas', 'H2gas', 'MetalsColdGas']
+            fields = ['StellarMass', 'BlackHoleMass', 'Len', 'SfrBulge', 'BulgeMass', 'Mvir', 'SfrDisk', 'ColdGas', 'H1gas', 'H2gas', 'MetalsColdGas']
             snap_num = f'Snap_{snap}'
             sSFRcut = -11.0
 
@@ -196,15 +196,15 @@ class Constraint(object):
                 mass = np.log10(smass[w])
                 sSFR = np.log10( (SfrDisk[w] + SfrBulge[w]) / StellarMass[w] )
                 
-                # additionally calculate red
-                w = np.where(sSFR < sSFRcut)[0]
-                massRED = mass[w]
+                # additionally calculate red (sSFR < -11 is quiescent/red)
+                w_red = np.where(sSFR < sSFRcut)[0]
+                massRED = mass[w_red]
                 (hist_smf_red_counts, binedges) = np.histogram(massRED, bins=mbins)
                 hist_smf_red = hist_smf_red_counts / dm / self.vol
 
-                # additionally calculate blue
-                w = np.where(sSFR > sSFRcut)[0]
-                massBLU = mass[w]
+                # additionally calculate blue (sSFR > -11 is star-forming/blue)
+                w_blue = np.where(sSFR > sSFRcut)[0]
+                massBLU = mass[w_blue]
                 (hist_smf_blue_counts, binedges) = np.histogram(massBLU, bins=mbins)
                 hist_smf_blue = hist_smf_blue_counts / dm / self.vol
 
@@ -217,8 +217,8 @@ class Constraint(object):
                 hist_bhmf = hist_bhmf_counts / dm2 / self.vol
                 
                 # Calculate HIMF (HI Mass Function)
-                # HI mass = ColdGas - H2_gas (ColdGas includes both HI and H2)
-                HI_mass = (G['ColdGas'] - G['H2gas']) * 1e10 / self.h0  # Convert to Msun
+                # HI mass is now output directly by SAGE as H1gas
+                HI_mass = G['H1gas'] * 1e10 / self.h0  # Convert to Msun
                 logHI = np.log10(HI_mass)
                 logHI[~np.isfinite(logHI)] = -20
                 
@@ -350,6 +350,36 @@ class Constraint(object):
             else:
                 hist_h2mf_err[i] = 999
 
+        # SMF Red errors
+        hist_smf_red_err = np.zeros_like(hist_smf_red)
+        for i in range(len(hist_smf_red)):
+            if hist_smf_red_counts[i] >= 1:
+                phi_upper = (hist_smf_red_counts[i] + np.sqrt(hist_smf_red_counts[i])) / dm / self.vol
+                phi_lower = np.maximum((hist_smf_red_counts[i] - np.sqrt(hist_smf_red_counts[i])), 0.5) / dm / self.vol
+                if hist_smf_red[i] > 0:
+                    err_up = np.log10(phi_upper) - np.log10(hist_smf_red[i])
+                    err_dn = np.log10(hist_smf_red[i]) - np.log10(phi_lower)
+                    hist_smf_red_err[i] = (err_up + err_dn) / 2.0
+                else:
+                    hist_smf_red_err[i] = 999
+            else:
+                hist_smf_red_err[i] = 999
+
+        # SMF Blue errors
+        hist_smf_blue_err = np.zeros_like(hist_smf_blue)
+        for i in range(len(hist_smf_blue)):
+            if hist_smf_blue_counts[i] >= 1:
+                phi_upper = (hist_smf_blue_counts[i] + np.sqrt(hist_smf_blue_counts[i])) / dm / self.vol
+                phi_lower = np.maximum((hist_smf_blue_counts[i] - np.sqrt(hist_smf_blue_counts[i])), 0.5) / dm / self.vol
+                if hist_smf_blue[i] > 0:
+                    err_up = np.log10(phi_upper) - np.log10(hist_smf_blue[i])
+                    err_dn = np.log10(hist_smf_blue[i]) - np.log10(phi_lower)
+                    hist_smf_blue_err[i] = (err_up + err_dn) / 2.0
+                else:
+                    hist_smf_blue_err[i] = 999
+            else:
+                hist_smf_blue_err[i] = 999
+
         #########################
         # take logs
         ind = (hist_smf > 0.)
@@ -384,6 +414,8 @@ class Constraint(object):
         hist_smf_red = hist_smf_red[np.newaxis]
         hist_smf_blue = hist_smf_blue[np.newaxis]
         hist_smf_err = hist_smf_err[np.newaxis]
+        hist_smf_red_err = hist_smf_red_err[np.newaxis]
+        hist_smf_blue_err = hist_smf_blue_err[np.newaxis]
         hist_bhmf_err = hist_bhmf_err[np.newaxis]
         hist_himf = hist_himf[np.newaxis]
         hist_himf_err = hist_himf_err[np.newaxis]
@@ -392,9 +424,9 @@ class Constraint(object):
 
         # [FIX] Return SMD_history instead of scalar 'smd'
         if num_snapshots > 1:
-            return self.h0, self.Omega0, hist_smf, hist_bhmf, hist_himf, SnapshotTimes, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, SMD_history, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr
+            return self.h0, self.Omega0, hist_smf, hist_bhmf, hist_himf, SnapshotTimes, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, SMD_history, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr
         else:
-            return self.h0, self.Omega0, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, SMD_history, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr
+            return self.h0, self.Omega0, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, SMD_history, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr
 
 
     def load_observation(self, *args, **kwargs):
@@ -442,18 +474,18 @@ class Constraint(object):
         """Gets the model and observational data for further analysis.
         The model data is interpolated to match the observation's X values."""
 
-        self.h0, self.Omega0, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr = self._load_model_data(modeldir, subvols)
+        self.h0, self.Omega0, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr = self._load_model_data(modeldir, subvols)
         x_obs, y_obs, y_dn, y_up = self.get_obs_x_y_err()
         x_sage, y_sage = self.get_sage_x_y()
-        x_mod, y_mod, y_mod_err = self.get_model_x_y(hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr)
+        x_mod, y_mod, y_mod_err = self.get_model_x_y(hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr)
         return x_obs, y_obs, y_dn, y_up, x_sage, y_sage, x_mod, y_mod, y_mod_err
 
     def get_data(self, modeldir, subvols):
 
-        self.h0, self.Omega0, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr = self._load_model_data(modeldir, subvols)
+        self.h0, self.Omega0, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr = self._load_model_data(modeldir, subvols)
         x_obs, y_obs, y_dn, y_up = self.get_obs_x_y_err()
         x_sage, y_sage = self.get_sage_x_y()
-        x_mod, y_mod, y_mod_err = self.get_model_x_y(hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr)
+        x_mod, y_mod, y_mod_err = self.get_model_x_y(hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr)
 
         # Both observations and model values don't come necessarily in order,
         # but if at the end of the day we want to perform array-wise operations
@@ -543,7 +575,7 @@ class BHMF(Constraint):
 
     domain = (4, 10.5)
 
-    def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr):
+    def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr):
         y = hist_bhmf[0]
         yerr = hist_bhmf_err[0]
         ind = np.where(y < 0.)
@@ -642,7 +674,7 @@ class SMF(Constraint):
 
     domain = (8.5, 12)
 
-    def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr):
+    def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr):
         y = hist_smf[0,:]
         yerr = hist_smf_err[0,:]
         ind = np.where(y < 0.)
@@ -809,7 +841,89 @@ class SMF_z40(SMF):
         y_sage = logphi[valid_mask]
 
         return x_sage, y_sage
-                              
+
+class SMF_Red(Constraint):
+    """Base class for Red/Quiescent SMF constraints"""
+
+    domain = (8.5, 12)
+
+    def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr):
+        y = hist_smf_red[0,:]
+        yerr = hist_smf_red_err[0,:]
+        ind = np.where(y < 0.)
+        return xmf[ind], y[ind], yerr[ind]
+
+class SMF_Red_z0(SMF_Red):
+    """Red/Quiescent SMF constraint at z=0 using GAMA E+HE data"""
+
+    z = [0]
+
+    def get_obs_x_y_err(self):
+        # Load GAMA morphological SMF data
+        # E_HE = Elliptical + High-mass Early-type (Red/Quiescent)
+        gama = self.load_observation('../data/gama_smf_morph.ecsv', cols=[0,1,2])
+        gama_mass = gama[:, 0]  # log stellar mass
+        gama_E_HE = gama[:, 1]  # log phi for E+HE (red)
+        gama_E_HE_err = gama[:, 2]  # error
+
+        # Filter out NaN values
+        valid = ~np.isnan(gama_E_HE)
+        x_obs = gama_mass[valid]
+        y_obs = gama_E_HE[valid]
+        y_err = gama_E_HE_err[valid]
+
+        return x_obs, y_obs, y_err, y_err
+
+    def get_sage_x_y(self):
+        # Load SAGE red SMF data
+        logm, phi = self.load_observation('../data/sage_smf_red_all_redshifts.csv', cols=[0,1])
+        logphi = np.log10(phi)
+        valid_mask = ~np.isnan(logm) & ~np.isnan(logphi)
+        x_sage = logm[valid_mask]
+        y_sage = logphi[valid_mask]
+        return x_sage, y_sage
+
+class SMF_Blue(Constraint):
+    """Base class for Blue/Star-forming SMF constraints"""
+
+    domain = (8.5, 12)
+
+    def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr):
+        y = hist_smf_blue[0,:]
+        yerr = hist_smf_blue_err[0,:]
+        ind = np.where(y < 0.)
+        return xmf[ind], y[ind], yerr[ind]
+
+class SMF_Blue_z0(SMF_Blue):
+    """Blue/Star-forming SMF constraint at z=0 using GAMA D data"""
+
+    z = [0]
+
+    def get_obs_x_y_err(self):
+        # Load GAMA morphological SMF data
+        # D = Disk (Blue/Star-forming)
+        gama = self.load_observation('../data/gama_smf_morph.ecsv', cols=[0,7,8])
+        gama_mass = gama[:, 0]  # log stellar mass
+        gama_D = gama[:, 1]  # log phi for D (blue)
+        gama_D_err = gama[:, 2]  # error
+
+        # Filter out NaN values
+        valid = ~np.isnan(gama_D)
+        x_obs = gama_mass[valid]
+        y_obs = gama_D[valid]
+        y_err = gama_D_err[valid]
+
+        return x_obs, y_obs, y_err, y_err
+
+    def get_sage_x_y(self):
+        # Load SAGE blue SMF data
+        logm, phi = self.load_observation('../data/sage_smf_blue_all_redshifts.csv', cols=[0,1])
+        logphi = np.log10(phi)
+        valid_mask = ~np.isnan(logm) & ~np.isnan(logphi)
+        x_sage = logm[valid_mask]
+        y_sage = logphi[valid_mask]
+        return x_sage, y_sage
+
 class CSFRDH(Constraint):
 
     # Select snapshots that span cosmic history (approximately evenly spaced in redshift/time)
@@ -846,7 +960,7 @@ class CSFRDH(Constraint):
         
         return tLB_D23, CSFH_D23, D23[:,2], D23[:,1]
         
-    def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr):
+    def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr):
         # TimeBinEdge now contains the actual snapshot times (lookback times in Gyr) for CSFRDH
         # Ignore the hist_smf and hist_bhmf arrays which contain -20 values
         # For CSFRDH, errors are not well-defined, return zeros
@@ -872,7 +986,7 @@ class BHBM(Constraint):
     domain = (8.0, 11.5)
     z = [0]
 
-    def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr):
+    def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr):
 
         mask = (BlackHoleMass > 0) & (BulgeMass > 0) & np.isfinite(BlackHoleMass) & np.isfinite(BulgeMass)
         y = BlackHoleMass[mask]
@@ -891,7 +1005,7 @@ class BHBM(Constraint):
         
         for i in range(len(bin_edges) - 1):
             bin_mask = (x >= bin_edges[i]) & (x < bin_edges[i+1])
-            if np.sum(bin_mask) >= 5:  # At least 5 galaxies in bin
+            if np.sum(bin_mask) >= 10:  # At least 10 galaxies in bin
                 bin_centers.append((bin_edges[i] + bin_edges[i+1]) / 2.0)
                 median_bh_mass.append(np.median(y[bin_mask]))
                 # Error on median is approximately 1.25 * std / sqrt(N) for Gaussian
@@ -935,7 +1049,7 @@ class BHBM(Constraint):
 class HIMF(Constraint):
     """The HI Mass Function constraint"""
 
-    domain = (7.0, 10.75)
+    domain = (8.0, 10.75)
     z = [0]
 
     def get_obs_x_y_err(self):
@@ -951,7 +1065,7 @@ class HIMF(Constraint):
 
         return x_obs, y_obs, y_dn, y_up
 
-    def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr):
+    def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr):
         y = hist_himf[0]
         yerr = hist_himf_err[0]
         ind = np.where(y < 0.)
@@ -988,7 +1102,7 @@ class H2MF(Constraint):
 
         return logm, logphi, np.abs(y_dn), np.abs(y_up)
 
-    def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr):
+    def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr):
         y = hist_h2mf[0]
         yerr = hist_h2mf_err[0]
         ind = np.where(y < 0.)
@@ -1056,7 +1170,7 @@ class SMD(Constraint):
 
         return z_obs, log_rho, y_dn, y_up
 
-    def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr):
+    def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr):
         # <--- NEW: 'smd' is now the SMD_history array from the loader
         
         # Calculate redshifts corresponding to the snapshots
@@ -1104,7 +1218,7 @@ class MZR(Constraint):
 
         return logm, metallicity, y_dn, y_up
 
-    def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr):
+    def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr):
         # Bin the metallicity data by stellar mass
         if len(stellar_mass_mzr) < 10:
             yerr_dummy = np.array([999.0, 999.0])
@@ -1117,7 +1231,7 @@ class MZR(Constraint):
 
         for i in range(len(bin_edges) - 1):
             bin_mask = (stellar_mass_mzr >= bin_edges[i]) & (stellar_mass_mzr < bin_edges[i+1])
-            if np.sum(bin_mask) >= 5:
+            if np.sum(bin_mask) >= 10:
                 bin_centers.append((bin_edges[i] + bin_edges[i+1]) / 2.0)
                 median_met.append(np.median(metallicity[bin_mask]))
                 N_bin = np.sum(bin_mask)
@@ -1162,7 +1276,7 @@ class SHMR(Constraint):
 
         return logm_halo, logm_stellar, y_dn, y_up
 
-    def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr):
+    def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr):
         # Bin the SHMR data by halo mass
         if len(halo_mass_shmr) < 10:
             yerr_dummy = np.array([999.0, 999.0])
@@ -1175,7 +1289,7 @@ class SHMR(Constraint):
 
         for i in range(len(bin_edges) - 1):
             bin_mask = (halo_mass_shmr >= bin_edges[i]) & (halo_mass_shmr < bin_edges[i+1])
-            if np.sum(bin_mask) >= 5:
+            if np.sum(bin_mask) >= 10:
                 bin_centers.append((bin_edges[i] + bin_edges[i+1]) / 2.0)
                 median_stellar.append(np.median(stellar_mass_shmr[bin_mask]))
                 N_bin = np.sum(bin_mask)
@@ -1215,6 +1329,8 @@ def parse(spec, snapshot=None, sim=None, boxsize=None, vol_frac=None, age_alist_
         'SMF_z20': SMF_z20,
         'SMF_z30': SMF_z30,
         'SMF_z40': SMF_z40,
+        'SMF_Red_z0': SMF_Red_z0,
+        'SMF_Blue_z0': SMF_Blue_z0,
         'BHBM': BHBM,
         'CSFRDH': CSFRDH,
         'HIMF': HIMF,

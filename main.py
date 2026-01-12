@@ -55,6 +55,8 @@ def get_required_snapshots(constraints_str):
         'SMF_z20': [32],
         'SMF_z30': [27],
         'SMF_z40': [23],
+        'SMF_Red_z0': [63],
+        'SMF_Blue_z0': [63],
         'BHMF_z0': [63],
         'BHMF_z10': [40],
         'BHBM': [63],
@@ -314,6 +316,8 @@ def main():
 
     # Initialize Data Containers
     smf_data_columns = []
+    smf_red_data_columns = []
+    smf_blue_data_columns = []
     bhmf_data_columns = []
     bhbm_data_columns = []
     halostellar_data_columns = []
@@ -348,7 +352,10 @@ def main():
         g_mvir = []
         g_coldgas = []
         g_metals = []
+        g_h1gas = []
         g_h2gas = []
+        g_sfrdisk = []
+        g_sfrbulge = []
 
         for file_path in hdf5_files:
             with h5py.File(file_path, 'r') as f:
@@ -359,30 +366,39 @@ def main():
                     m = np.array(loc['Mvir']) * 1.0e10 / h if 'Mvir' in loc else []
                     cg = np.array(loc['ColdGas']) * 1.0e10 / h if 'ColdGas' in loc else []
                     met = np.array(loc['MetalsColdGas']) * 1.0e10 / h if 'MetalsColdGas' in loc else []
+                    h1 = np.array(loc['H1gas']) * 1.0e10 / h if 'H1gas' in loc else []
                     h2 = np.array(loc['H2gas']) * 1.0e10 / h if 'H2gas' in loc else []
-                    return s, bh, b, m, cg, met, h2
+                    sfrd = np.array(loc['SfrDisk']) if 'SfrDisk' in loc else []
+                    sfrb = np.array(loc['SfrBulge']) if 'SfrBulge' in loc else []
+                    return s, bh, b, m, cg, met, h1, h2, sfrd, sfrb
 
                 if structure_type == 'core_level':
                     for core in f.keys():
                         if snap_key in f[core]:
-                            s, bh, b, m, cg, met, h2 = get_props(f[core][snap_key])
+                            s, bh, b, m, cg, met, h1, h2, sfrd, sfrb = get_props(f[core][snap_key])
                             g_stellar.extend(s)
                             g_bhole.extend(bh)
                             g_bulge.extend(b)
                             g_mvir.extend(m)
                             g_coldgas.extend(cg)
                             g_metals.extend(met)
+                            g_h1gas.extend(h1)
                             g_h2gas.extend(h2)
+                            g_sfrdisk.extend(sfrd)
+                            g_sfrbulge.extend(sfrb)
                 else:
                     if snap_key in f:
-                        s, bh, b, m, cg, met, h2 = get_props(f[snap_key])
+                        s, bh, b, m, cg, met, h1, h2, sfrd, sfrb = get_props(f[snap_key])
                         g_stellar.extend(s)
                         g_bhole.extend(bh)
                         g_bulge.extend(b)
                         g_mvir.extend(m)
                         g_coldgas.extend(cg)
                         g_metals.extend(met)
+                        g_h1gas.extend(h1)
                         g_h2gas.extend(h2)
+                        g_sfrdisk.extend(sfrd)
+                        g_sfrbulge.extend(sfrb)
 
         g_stellar = np.array(g_stellar)
         g_bhole = np.array(g_bhole)
@@ -390,7 +406,10 @@ def main():
         g_mvir = np.array(g_mvir)
         g_coldgas = np.array(g_coldgas)
         g_metals = np.array(g_metals)
+        g_h1gas = np.array(g_h1gas)
         g_h2gas = np.array(g_h2gas)
+        g_sfrdisk = np.array(g_sfrdisk)
+        g_sfrbulge = np.array(g_sfrbulge)
 
         # --- SMF ---
         valid = g_stellar > 0
@@ -403,6 +422,39 @@ def main():
             centers = smf_bins[:-1] + binwidth / 2
             phi = np.zeros_like(centers)
         smf_data_columns.extend([centers, phi])
+
+        # --- SMF Red (Quiescent, sSFR < -11) ---
+        sSFRcut = -11.0
+        valid_sfr = (g_stellar > 0) & (g_sfrdisk + g_sfrbulge > 0)
+        if np.sum(valid_sfr) > 0:
+            sSFR = np.log10((g_sfrdisk[valid_sfr] + g_sfrbulge[valid_sfr]) / g_stellar[valid_sfr])
+            logM = np.log10(g_stellar[valid_sfr])
+            # Red galaxies: sSFR < -11
+            red_mask = sSFR < sSFRcut
+            if np.sum(red_mask) > 0:
+                hist_red, edges = np.histogram(logM[red_mask], bins=smf_bins)
+                phi_red = hist_red / (volume * binwidth)
+                centers = edges[:-1] + binwidth / 2
+                phi_red[phi_red == 0] = np.nan
+            else:
+                centers = smf_bins[:-1] + binwidth / 2
+                phi_red = np.full_like(centers, np.nan)
+            # Blue galaxies: sSFR > -11
+            blue_mask = sSFR > sSFRcut
+            if np.sum(blue_mask) > 0:
+                hist_blue, edges = np.histogram(logM[blue_mask], bins=smf_bins)
+                phi_blue = hist_blue / (volume * binwidth)
+                centers = edges[:-1] + binwidth / 2
+                phi_blue[phi_blue == 0] = np.nan
+            else:
+                centers = smf_bins[:-1] + binwidth / 2
+                phi_blue = np.full_like(centers, np.nan)
+        else:
+            centers = smf_bins[:-1] + binwidth / 2
+            phi_red = np.full_like(centers, np.nan)
+            phi_blue = np.full_like(centers, np.nan)
+        smf_red_data_columns.extend([centers, phi_red])
+        smf_blue_data_columns.extend([centers, phi_blue])
 
         # --- BHMF ---
         valid = g_bhole > 0
@@ -460,11 +512,11 @@ def main():
             mzr_data_columns.extend([centers, median_Z])
 
         # --- HIMF (HI Mass Function) ---
-        if len(g_coldgas) > 0 and len(g_h2gas) > 0:
-            g_hi = g_coldgas - g_h2gas
-            valid = g_hi > 0
+        # HI mass is now output directly by SAGE as H1gas
+        if len(g_h1gas) > 0:
+            valid = g_h1gas > 0
             if np.sum(valid) > 0:
-                hist, edges = np.histogram(np.log10(g_hi[valid]), bins=himf_bins)
+                hist, edges = np.histogram(np.log10(g_h1gas[valid]), bins=himf_bins)
                 phi = hist / (volume * binwidth)
                 centers = edges[:-1] + binwidth / 2
                 phi[phi == 0] = np.nan
@@ -544,6 +596,8 @@ def main():
 
     write_wide_csv('sage_smf_all_redshifts.csv', smf_data_columns)
     write_wide_csv('sage_smf_extra_redshifts.csv', smf_data_columns)
+    write_wide_csv('sage_smf_red_all_redshifts.csv', smf_red_data_columns)
+    write_wide_csv('sage_smf_blue_all_redshifts.csv', smf_blue_data_columns)
     write_wide_csv('sage_bhmf_all_redshifts.csv', bhmf_data_columns)
     write_wide_csv('sage_bhbm_all_redshifts.csv', bhbm_data_columns)
     write_wide_csv('sage_halostellar_all_redshifts.csv', halostellar_data_columns)
