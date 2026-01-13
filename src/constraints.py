@@ -19,6 +19,7 @@ import pandas as pd # type: ignore
 from scipy.stats import binned_statistic # type: ignore
 import logging
 import scipy.stats as stats
+from src.simulation_config import get_csfrdh_snapshots, get_smd_snapshots
 
 warnings.filterwarnings("ignore")
 logging.getLogger('constraints').setLevel(logging.INFO)
@@ -928,10 +929,15 @@ class SMF_Blue_z0(SMF_Blue):
 
 class CSFRDH(Constraint):
 
-    # Select snapshots that span cosmic history (approximately evenly spaced in redshift/time)
-    # From z~4 to z=0: snapshots [23, 27, 32, 36, 40, 44, 48, 52, 56, 60, 63]
-    z = [23, 27, 32, 36, 40, 44, 48, 52, 56, 60, 63]
+    # Snapshots are now simulation-specific, set in __init__
+    z = None  # Will be set dynamically based on simulation
     domain = (0, 12) # look-back time in Gyr
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Get simulation-specific CSFRDH snapshots
+        self.z = get_csfrdh_snapshots(self.sim)
+        self.snapshot = self.z
     
     def get_obs_x_y_err(self):
 #        zmin, zmax, logSFRD, err1, err2, err3 = self.load_observation('../data/Driver_SFRD.dat', cols=[1,2,3,5,6,7])
@@ -1124,11 +1130,13 @@ class SMD(Constraint):
     """Stellar Mass Density constraint vs redshift"""
 
     domain = (0.0, 12.0)
-    # <--- NEW: Include lower snapshot numbers (e.g., 10, 14, 18) to reach z > 4
-    z = [10, 14, 18, 23, 27, 32, 36, 40, 44, 48, 52, 56, 60, 63] 
+    # Snapshots are now simulation-specific, set in __init__
+    z = None  # Will be set dynamically based on simulation
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        # Get simulation-specific SMD snapshots
+        self.z = get_smd_snapshots(self.sim)
         self.snapshot = self.z
 
     def get_obs_x_y_err(self):

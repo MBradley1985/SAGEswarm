@@ -604,11 +604,11 @@ def load_sage_data():
     # We have 6 snapshots (z=0, 0.5, 1.0, 2.0, 3.0, 4.0) -> 12 Columns
     DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
     sage_data = load_observation(os.path.join(DATA_DIR, 'sage_smf_all_redshifts.csv'), cols=list(range(12)))
-    
+
     data_by_z = {}
-    
+
     # These must match the 'target_snapshots' order in main.py
-    # Snaps: 63, 48, 40, 32, 27, 23
+    # Column order corresponds to z=0, 0.5, 1.0, 2.0, 3.0, 4.0 (simulation-specific snapshots)
     redshifts = [0.0, 0.5, 1.0, 2.0, 3.0, 4.0]
     
     # Column indices pairs (Mass, Phi) for each redshift
@@ -1134,7 +1134,7 @@ def get_mzr_files_map(config_opts):
     obs_data = load_mzr_obs_data()
     # LOAD ACTUAL SAGE DATA
     # We saved it as 'sage_mzr_all_redshifts.csv' in main.py
-    # Columns 0,1 correspond to z=0 (Snapshot 63, first in target_snapshots)
+    # Columns 0,1 correspond to z=0 (first in target_snapshots, simulation-specific)
     try:
         DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
         mzr_data = np.loadtxt(os.path.join(DATA_DIR, 'sage_mzr_all_redshifts.csv'))

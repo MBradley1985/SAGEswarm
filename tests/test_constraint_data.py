@@ -9,19 +9,19 @@ sys.path.insert(0, '.')
 
 from constraints import SMF_z0, SMF_z05, SMF_z10, SMF_z20, BHMF_z0, BHBM_z0
 from analysis import chi2
+from src.simulation_config import get_snapshot_map, SIM_MINIMILLENNIUM
 
-# Test configuration
-snapshot_map = {
-    'SMF_z0': 63,
-    'SMF_z05': 40,
-    'SMF_z10': 38,
-    'SMF_z20': 32,
-    'BHMF_z0': 63,
-    'BHBM_z0': 63
-}
+# Test configuration - use simulation-specific snapshot map
+sim_id = SIM_MINIMILLENNIUM
+sim_snapshot_map = get_snapshot_map(sim_id)
+
+# Extract single snapshot for each constraint (first element of list)
+snapshot_map = {key: val[0] for key, val in sim_snapshot_map.items() if key in ['SMF_z0', 'SMF_z05', 'SMF_z10', 'SMF_z20', 'BHMF_z0', 'BHBM']}
+# BHBM_z0 is just BHBM in the snapshot map
+snapshot_map['BHBM_z0'] = sim_snapshot_map['BHBM'][0]
 
 sim_params = {
-    'sim': 1,
+    'sim': sim_id,
     'boxsize': 62.5,
     'vol_frac': 1.0,
     'h0': 0.73,

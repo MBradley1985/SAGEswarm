@@ -18,6 +18,10 @@ from src import execution
 from src import pso
 import glob
 from src import diagnostics
+from src.simulation_config import (
+    get_snapshot_map, get_target_snapshots, get_history_snapshots,
+    get_simulation_config, SIM_MINIUCHUU, SIM_MINIMILLENNIUM, SIM_MTNG
+)
 
 
 logger = logging.getLogger('main')
@@ -45,31 +49,26 @@ def setup_logging(outdir):
     logging.getLogger('diagnostics').setLevel(logging.INFO)
     logging.getLogger('main').setLevel(logging.INFO)
 
-def get_required_snapshots(constraints_str):
-    """Get all unique snapshots needed for constraints"""
-    # Map of constraint classes to their snapshots
-    snapshot_map = {
-        'SMF_z0': [63],
-        'SMF_z05': [48],
-        'SMF_z10': [40],
-        'SMF_z20': [32],
-        'SMF_z30': [27],
-        'SMF_z40': [23],
-        'SMF_Red_z0': [63],
-        'SMF_Blue_z0': [63],
-        'BHMF_z0': [63],
-        'BHMF_z10': [40],
-        'BHBM': [63],
-        'CSFRDH': [23, 27, 32, 36, 40, 44, 48, 52, 56, 60, 63],  # Snapshots spanning cosmic history
-        'HIMF': [63],
-        'H2MF': [63],
-        'MZR': [63],
-        'SHMR': [63],
-        'SMD': [10, 14, 18, 23, 27, 32, 36, 40, 44, 48, 52, 56, 60, 63]
-    }
-    
+def get_required_snapshots(constraints_str, sim=0):
+    """Get all unique snapshots needed for constraints.
+
+    Parameters:
+    -----------
+    constraints_str : str
+        Comma-separated list of constraint names
+    sim : int
+        Simulation ID (0=miniUchuu, 1=miniMillennium, 2=MTNG)
+
+    Returns:
+    --------
+    list : Sorted list of unique snapshot numbers needed
+    """
+    # Get simulation-specific snapshot map
+    snapshot_map = get_snapshot_map(sim)
+
     snapshots = set()
     print(f"Parsing constraints string: {constraints_str}")
+    print(f"Using simulation ID: {sim} ({['miniUchuu', 'miniMillennium', 'MTNG'][sim]})")
     for constraint in constraints_str.split(','):
         # Remove any weight/domain specifications
         base_constraint = constraint.split('(')[0].split('*')[0]
@@ -80,7 +79,7 @@ def get_required_snapshots(constraints_str):
             snapshots.update(snapshot_map[base_constraint])
         else:
             print(f"Warning: No snapshot mapping found for {base_constraint}")
-    
+
     result = sorted(list(snapshots))
     print(f"Final snapshots list: {result}")
     return result
@@ -289,9 +288,10 @@ def main():
 
         h = header.get('HubbleParam', opts.h0)
         box = header.get('BoxSize', opts.boxsize)
-        n_files_total = header.get('NumFilesPerSnapshot', 1)
-        n_files_processed = len(hdf5_files)
-        vol_frac = n_files_processed / n_files_total
+
+        # Use user-provided vol_frac from command line arguments
+        # This takes precedence over auto-calculated values from file counts
+        vol_frac = opts.vol_frac
 
         # Calculate Volume (Mpc^3)
         volume = (box / h)**3 * vol_frac
@@ -307,12 +307,13 @@ def main():
             raise ValueError("Unknown HDF5 structure")
 
     # 5. Define Target Snapshots (z=0, 0.5, 1.0, 2.0, 3.0, 4.0)
-    # Corresponds to Millennium snapshots: 63, 48, 40, 32, 27, 23
-    target_snapshots = [63, 48, 40, 32, 27, 23]
-    print(f"Target Snapshots: {target_snapshots}")
+    # Use simulation-specific snapshots
+    target_snapshots = get_target_snapshots(opts.sim)
+    print(f"Target Snapshots for sim={opts.sim}: {target_snapshots}")
 
     # Snapshots for History (CSFRDH, SMD) - spanning z=0 to z~4
-    history_snapshots = [10, 14, 18, 23, 27, 32, 36, 40, 44, 48, 52, 56, 60, 63]
+    # Use simulation-specific snapshots
+    history_snapshots = get_history_snapshots(opts.sim)
 
     # Initialize Data Containers
     smf_data_columns = []
@@ -615,7 +616,7 @@ def main():
     if opts.snapshot is not None:
         snapshots = opts.snapshot
     else:
-        snapshots = get_required_snapshots(opts.constraints)
+        snapshots = get_required_snapshots(opts.constraints, sim=opts.sim)
         opts.snapshot = snapshots
 
     # Create the output directory if it doesn't exist
