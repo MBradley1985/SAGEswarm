@@ -73,47 +73,6 @@ pip install -r requirements.txt
 
 ---
 
-## Package Structure
-
-```
-sage-optim/
-  analysis.py              # Statistical tests and search space loading
-  common.py                # Shared utilities and configuration parsing
-  constraints.py           # Constraint classes and parsing logic
-  diagnostics.py           # Diagnostic plots and PSO visualization
-  diagnostics2.py          # Additional diagnostics and plotting
-  execution.py             # SAGE execution and workflow management
-  main.py                  # Main entry point for PSO workflow
-  pso.py                   # PSO algorithm implementation
-  pso_uncertainty.py       # Uncertainty analysis and reporting
-  routines.py              # Data processing and helper routines
-  redshift_utils.py        # Redshift handling utilities
-  data/                    # All required observational and model data files
-  plots_and_random/        # Plotting scripts and utilities
-  test_constraint_data.py  # Quick constraint data tests
-  test_pso_benchmarks.py   # PSO benchmark tests
-  quick_pso_test.py        # Minimal PSO sanity check
-  requirements.txt         # Python dependencies
-  README.md                # This documentation
-  run_pso.sh               # Batch script for running PSO
-  run_multiple_pso.sh      # Batch script for multiple runs
-  run_multiple_pso_slurm.sh# SLURM batch script for HPC
-  space.txt                # Default search space specification
-  space_massSF.txt         # Alternative search space file
-```
-
----
-
-## Usage
-
-### Basic Workflow
-
-Run the main optimization script from the repo root:
-
-```bash
-python main.py --sage-binary /path/to/sage --config /path/to/input.par [other options]
-```
-
 #### Workflow Steps
 
 1. **CSV Data Check:** At startup, the workflow checks for required `sage_*.csv` files in the `data/` folder.
