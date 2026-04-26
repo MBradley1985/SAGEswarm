@@ -45,9 +45,9 @@ def count_jobs(job_name, username=None):
         raise RuntimeError("Couldn't run squeue, is it installed?")
 
 #This is the original function and is just fine
-def _exec_sage(msg, cmdline):
+def _exec_sage(msg, cmdline, cwd=None):
     logger.info('%s with command line: %s', msg, subprocess.list2cmdline(cmdline))
-    out, err, code = common.exec_command(cmdline)
+    out, err, code = common.exec_command(cmdline, cwd=cwd)
     if code != 0:
         logger.error('Error while executing %s (exit code %d):\n' +
                      'stdout:\n%s\nstderr:\n%s', cmdline[0], code,
@@ -237,7 +237,8 @@ def run_sage_hpc(particles, *args):
             ]
 
             # Launch process and store handle
-            process = subprocess.Popen(cmdline, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            process = subprocess.Popen(cmdline, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                       cwd=os.path.dirname(opts.sage_binary))
             processes.append((i, process, temp_filename, particle_dir))
             
         # Wait for all MPI processes to complete
@@ -339,7 +340,7 @@ def run_sage(particle, *args):
     print('Running SAGE instance', temp_filename)
 #    cmdline = ['mpirun', '-np', '8', opts.sage_binary, temp_filename]
     cmdline = [opts.sage_binary, temp_filename]
-    _exec_sage('Running SAGE instance', cmdline)
+    _exec_sage('Running SAGE instance', cmdline, cwd=os.path.dirname(opts.sage_binary))
 
     # Simple weighted sum of constraint scores (fixed from exponential transformation)
     total = sum(_evaluate(c, statTest, modeldir, subvols) * c.rel_weight for c in opts.constraints)

@@ -240,7 +240,9 @@ def main():
         with open(opts.config, 'r') as parfile:
             for line in parfile:
                 if line.strip().startswith('OutputDir'):
-                    output_dir = line.split()[1].strip()
+                    raw_dir = line.split()[1].strip()
+                    sage_dir = os.path.dirname(opts.sage_binary)
+                    output_dir = os.path.join(sage_dir, raw_dir) if not os.path.isabs(raw_dir) else raw_dir
                     break
     except Exception as e:
         print(f"Error reading config file: {e}")
@@ -268,7 +270,7 @@ def main():
 
         print(f"Executing SAGE: {opts.sage_binary} {opts.config}")
         sage_cmd = [opts.sage_binary, opts.config]
-        subprocess.run(sage_cmd, cwd=opts.outdir, check=True)
+        subprocess.run(sage_cmd, cwd=os.path.dirname(opts.sage_binary), check=True)
 
         # Find the newly generated files
         if output_dir and os.path.exists(output_dir):

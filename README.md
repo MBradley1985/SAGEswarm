@@ -246,7 +246,7 @@ BlackHoleGrowthRate,eBHgrowth,1,0.0001,0.5
 - Box size: 400 Mpc/h
 - Cosmology: h=0.6774, Ω₀=0.3089
 
-### miniMillennium (SIM_ID=1)
+### miniMillennium (SIM_ID=1) (Use this one)
 - 64 snapshots (0-63), snapshot 63 = z=0
 - Box size: 62.5 Mpc/h
 - Cosmology: h=0.73, Ω₀=0.25
