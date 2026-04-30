@@ -1,9 +1,5 @@
 #!/bin/bash
 
-# PSO workflow for SAGE — Fig. 26 corner plot run.
-# Parameters: α_SF, ε_disk, ε_halo, α_FFB
-# Constraints: SMF at z=0, z~6 (snap 18), z~7 (snap 16) — stacked χ²
-
 CONFIG_PATH="../SAGE26/input/millennium.par"
 BASE_PATH="../SAGE26/sage"
 OUTPUT_PATH="./millennium_pso"
