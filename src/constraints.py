@@ -29,9 +29,9 @@ GyrToYr = 1e9
 # Binning configuration
 mupp = 12.0
 dm = 0.1
-mlow = 8
+mlow = 6.5
 mbins = np.arange(mlow, mupp, dm)
-xmf = mbins + dm/2.0
+xmf = mbins[:-1] + dm/2.0
 
 mupp2 = 10.5
 dm2 = 0.1
@@ -286,11 +286,16 @@ class Constraint(object):
         TimeBinCentre = TimeBinEdge[:-1] + 0.5*dT
 
         #########################
-        # Calculate Poisson errors before taking logs
-        # For a number count N, the Poisson error is sqrt(N)
-        # In log space: sigma_log(phi) ≈ 0.434 / sqrt(N) for N >> 1
-        # We use the more accurate formula: sigma_log = |log10(phi) - log10(phi ± sqrt(N)/Volume/dm)|
-        
+        # Calculate Poisson errors before taking logs.
+        # For empty bins (N=0), use the Poisson upper limit: treating 0 detections as
+        # N_eff=0.5 gives phi_upper = 0.5/(dm*vol) — physically "fewer than 1 galaxy
+        # in the box at this mass".  The corresponding log-space error is log10(2)~0.3 dex.
+        # This replaces the old -20 / 999 sentinels that corrupted np.interp and gave
+        # the PSO a nonsensical (huge or zero) chi² signal for high-z empty bins.
+        phi_empty     = 0.5 / (dm * self.vol)          # Poisson UL for 0 detections
+        phi_empty_log = np.log10(phi_empty)             # typically ~ -5 for Millennium
+        phi_empty_err = np.log10(2.0)                   # ~0.3 dex
+
         # SMF errors
         hist_smf_err = np.zeros_like(hist_smf)
         for i in range(len(hist_smf)):
@@ -304,9 +309,9 @@ class Constraint(object):
                     err_dn = np.log10(hist_smf[i]) - np.log10(phi_lower)
                     hist_smf_err[i] = (err_up + err_dn) / 2.0
                 else:
-                    hist_smf_err[i] = 999  # Large error for empty bins
+                    hist_smf_err[i] = phi_empty_err
             else:
-                hist_smf_err[i] = 999  # Large error for empty bins
+                hist_smf_err[i] = phi_empty_err
         
         # BHMF errors
         hist_bhmf_err = np.zeros_like(hist_bhmf)
@@ -321,10 +326,10 @@ class Constraint(object):
                     err_dn = np.log10(hist_bhmf[i]) - np.log10(phi_lower)
                     hist_bhmf_err[i] = (err_up + err_dn) / 2.0
                 else:
-                    hist_bhmf_err[i] = 999  # Large error for empty bins
+                    hist_bhmf_err[i] = phi_empty_err
             else:
-                hist_bhmf_err[i] = 999  # Large error for empty bins
-        
+                hist_bhmf_err[i] = phi_empty_err
+
         # HIMF errors
         hist_himf_err = np.zeros_like(hist_himf)
         for i in range(len(hist_himf)):
@@ -338,9 +343,9 @@ class Constraint(object):
                     err_dn = np.log10(hist_himf[i]) - np.log10(phi_lower)
                     hist_himf_err[i] = (err_up + err_dn) / 2.0
                 else:
-                    hist_himf_err[i] = 999  # Large error for empty bins
+                    hist_himf_err[i] = phi_empty_err
             else:
-                hist_himf_err[i] = 999  # Large error for empty bins
+                hist_himf_err[i] = phi_empty_err
 
         # H2MF errors
         hist_h2mf_err = np.zeros_like(hist_h2mf)
@@ -353,9 +358,9 @@ class Constraint(object):
                     err_dn = np.log10(hist_h2mf[i]) - np.log10(phi_lower)
                     hist_h2mf_err[i] = (err_up + err_dn) / 2.0
                 else:
-                    hist_h2mf_err[i] = 999
+                    hist_h2mf_err[i] = phi_empty_err
             else:
-                hist_h2mf_err[i] = 999
+                hist_h2mf_err[i] = phi_empty_err
 
         # SMF Red errors
         hist_smf_red_err = np.zeros_like(hist_smf_red)
@@ -368,9 +373,9 @@ class Constraint(object):
                     err_dn = np.log10(hist_smf_red[i]) - np.log10(phi_lower)
                     hist_smf_red_err[i] = (err_up + err_dn) / 2.0
                 else:
-                    hist_smf_red_err[i] = 999
+                    hist_smf_red_err[i] = phi_empty_err
             else:
-                hist_smf_red_err[i] = 999
+                hist_smf_red_err[i] = phi_empty_err
 
         # SMF Blue errors
         hist_smf_blue_err = np.zeros_like(hist_smf_blue)
@@ -383,35 +388,38 @@ class Constraint(object):
                     err_dn = np.log10(hist_smf_blue[i]) - np.log10(phi_lower)
                     hist_smf_blue_err[i] = (err_up + err_dn) / 2.0
                 else:
-                    hist_smf_blue_err[i] = 999
+                    hist_smf_blue_err[i] = phi_empty_err
             else:
-                hist_smf_blue_err[i] = 999
+                hist_smf_blue_err[i] = phi_empty_err
 
         #########################
-        # take logs
+        # take logs — empty bins get Poisson UL (phi_empty_log) instead of -20 sentinel
         ind = (hist_smf > 0.)
         hist_smf[ind] = np.log10(hist_smf[ind])
-        hist_smf[~ind] = -20
+        hist_smf[~ind] = phi_empty_log
 
         ind = (hist_smf_red > 0.)
         hist_smf_red[ind] = np.log10(hist_smf_red[ind])
-        hist_smf_red[~ind] = -20
+        hist_smf_red[~ind] = phi_empty_log
 
         ind = (hist_smf_blue > 0.)
         hist_smf_blue[ind] = np.log10(hist_smf_blue[ind])
-        hist_smf_blue[~ind] = -20
+        hist_smf_blue[~ind] = phi_empty_log
 
+        phi_empty_bhmf = np.log10(0.5 / (dm2 * self.vol))
         ind = (hist_bhmf > 0.)
         hist_bhmf[ind] = np.log10(hist_bhmf[ind])
-        hist_bhmf[~ind] = -20
+        hist_bhmf[~ind] = phi_empty_bhmf
 
+        phi_empty_himf = np.log10(0.5 / (dm_h1 * self.vol))
         ind = (hist_himf > 0.)
         hist_himf[ind] = np.log10(hist_himf[ind])
-        hist_himf[~ind] = -20
+        hist_himf[~ind] = phi_empty_himf
 
+        phi_empty_h2mf = np.log10(0.5 / (dm_h2 * self.vol))
         ind = (hist_h2mf > 0.)
         hist_h2mf[ind] = np.log10(hist_h2mf[ind])
-        hist_h2mf[~ind] = -20
+        hist_h2mf[~ind] = phi_empty_h2mf
 
         SFRD_Age = np.log10(SFRbyAge)
         SFRD_Age[~np.isfinite(SFRD_Age)] = -20
@@ -528,48 +536,22 @@ class Constraint(object):
         y_mod_err_sel = y_mod_err_interp[sel]
         y_obs_err_sel = np.maximum(np.abs(y_dn[sel]), np.abs(y_up[sel]))
         err = np.sqrt(y_obs_err_sel ** 2.0 + y_mod_err_sel ** 2.0)
-        
-        print('in get_data:')
-        print('obs x:', np.round(x_obs_sel, 2))
-        print('obs y:', np.round(y_obs_sel, 2))
-        print('mod y:', np.round(y_mod_sel, 2))
-        print('obs errors:', np.round(y_obs_err_sel, 2))
-        print('mod errors:', np.round(y_mod_err_sel, 2))
-        print('combined errors:', np.round(err, 2))
-        print('differences (mod-obs):', np.round(y_mod_sel - y_obs_sel, 2))
-        print('normalized differences:', np.round((y_mod_sel - y_obs_sel) / err, 2))
+        err = np.maximum(err, 1e-4)   # guard against zero errors causing inf chi²
 
-        # Get the constraint name and create filename directly in outdir
-        constraint_name = self.__class__.__name__
-        filename = os.path.join(self.output_dir, f"{constraint_name}_dump.txt")
+        # Write dump file for tracking
+        if self.output_dir:
+            constraint_name = self.__class__.__name__
+            filename = os.path.join(self.output_dir, f"{constraint_name}_dump.txt")
+            with open(filename, 'a') as f:
+                f.write(f"# New Data Block\n")
+                for x_val, y_val, mod_y_val in zip(x_obs_sel, y_obs_sel, y_mod_sel):
+                    f.write(f"{x_val}\t{y_val}\t{mod_y_val}\n")
 
-        # Append data to dump file
-        with open(filename, 'a') as f:
-            f.write(f"# New Data Block\n")
-            for x_val, y_val, mod_y_val in zip(x_obs_sel, y_obs_sel, y_mod_sel):
-                f.write(f"{x_val}\t{y_val}\t{mod_y_val}\n")
-            
-        # Get constraint name for appropriate plotting function
-        # constraint_name = self.__class__.__name__
-        
-        # # Create specialized publication-quality plots
-        # if 'SMF' in constraint_name:
-        #     self.plot_smf(x_obs_sel, y_obs_sel, y_mod_sel, x_sage, y_sage, y_dn[sel], y_up[sel], self.output_dir)
-        # elif 'BHMF' in constraint_name:
-        #     self.plot_bhmf(x_obs_sel, y_obs_sel, y_mod_sel, x_sage, y_sage, y_dn[sel], y_up[sel], self.output_dir)
-        # elif 'HIMF' in constraint_name:
-        #     self.plot_himf(x_obs_sel, y_obs_sel, y_mod_sel, x_sage, y_sage, y_dn[sel], y_up[sel], self.output_dir)
-        # elif 'BHBM' in constraint_name:
-        #     self.plot_bhbm(x_obs_sel, y_obs_sel, y_mod_sel, x_sage, y_sage, y_dn[sel], y_up[sel], BlackHoleMass, BulgeMass, self.output_dir)
-        # elif 'CSFRDH' in constraint_name:
-        #     self.plot_CSFRDH(x_obs_sel, y_obs_sel, y_mod_sel, x_sage, y_sage, y_dn[sel], y_up[sel], TimeBinEdge, SFRD_Age, self.output_dir)
-        
-        # Always create diagnostic plot showing interpolation/selection steps
-        self.plot_diagnostic(x_obs, y_obs, y_dn, y_up, 
-                           x_mod, y_mod, y_mod_interp, 
-                           x_obs_sel, y_obs_sel, y_mod_sel, err, 
-                           self.output_dir)
-        
+            self.plot_diagnostic(x_obs, y_obs, y_dn, y_up,
+                               x_mod, y_mod, y_mod_interp,
+                               x_obs_sel, y_obs_sel, y_mod_sel, err,
+                               self.output_dir)
+
         return y_obs_sel, y_mod_sel, err
 
     def __str__(self):
@@ -849,6 +831,99 @@ class SMF_z40(SMF):
 
         return x_sage, y_sage
 
+def _load_stefanon2021(redshift_bin, h_model):
+    """Load Stefanon et al. (2021) SMF for a given integer redshift bin.
+
+    Returns (x_obs, y_obs, y_dn, y_up) with all h0 corrections applied.
+    phi is given in units of 1e-4 Mpc^-3 dex^-1; h_obs=0.7.
+    """
+    import os as _os
+    data_file = _os.path.join(_os.path.dirname(__file__), '../data/stefanon_smf_2021.ecsv')
+    raw = np.genfromtxt(data_file, comments='#', skip_header=1,
+                        names=['z', 'lm', 'dlm', 'phi', 'eu', 'el'])
+    sel = raw['z'] == redshift_bin
+    lm  = raw['lm'][sel]
+    phi = raw['phi'][sel] * 1e-4        # → Mpc^-3 dex^-1
+    eu  = raw['eu'][sel]  * 1e-4
+    el  = raw['el'][sel]  * 1e-4
+
+    # Keep only points with positive phi and valid lower errors
+    valid = (phi > 0) & (el > 0) & (el < phi)
+    lm, phi, eu, el = lm[valid], phi[valid], eu[valid], el[valid]
+
+    h_obs = 0.7
+    x_obs = lm  - 2.0 * np.log10(h_obs / h_model)
+    y_obs = np.log10(phi) + 3.0 * np.log10(h_obs / h_model)
+    y_dn  = np.log10(phi) - np.log10(phi - el)   # asymmetric lower error in dex
+    y_up  = np.log10(phi + eu) - np.log10(phi)   # asymmetric upper error in dex
+    return x_obs, y_obs, y_dn, y_up
+
+
+class SMF_z50(SMF):
+    """SMF at z~5, Stefanon et al. (2021)  [data: logM 7.5–10.5]"""
+
+    z = [5.0]
+    domain = (7.5, 10.5)
+
+    def get_obs_x_y_err(self):
+        return _load_stefanon2021(5, self.h0)
+
+    def get_sage_x_y(self):
+        return np.zeros(0), np.zeros(0)
+
+
+class SMF_z60(SMF):
+    """SMF at z~6, Stefanon et al. (2021)  [data: logM 7.8–10.6]"""
+
+    z = [6.0]
+    domain = (7.5, 11.0)
+
+    def get_obs_x_y_err(self):
+        return _load_stefanon2021(6, self.h0)
+
+    def get_sage_x_y(self):
+        return np.zeros(0), np.zeros(0)
+
+
+class SMF_z70(SMF):
+    """SMF at z~7, Stefanon et al. (2021)  [data: logM 7.75–10.3]"""
+
+    z = [7.0]
+    domain = (7.5, 10.5)
+
+    def get_obs_x_y_err(self):
+        return _load_stefanon2021(7, self.h0)
+
+    def get_sage_x_y(self):
+        return np.zeros(0), np.zeros(0)
+
+
+class SMF_z80(SMF):
+    """SMF at z~8, Stefanon et al. (2021)  [data: logM 7.9–10.15]"""
+
+    z = [8.0]
+    domain = (7.5, 10.5)
+
+    def get_obs_x_y_err(self):
+        return _load_stefanon2021(8, self.h0)
+
+    def get_sage_x_y(self):
+        return np.zeros(0), np.zeros(0)
+
+
+class SMF_z100(SMF):
+    """SMF at z~10, Stefanon et al. (2021)  [data: logM 7.65–8.75]"""
+
+    z = [10.0]
+    domain = (7.5, 9.0)
+
+    def get_obs_x_y_err(self):
+        return _load_stefanon2021(10, self.h0)
+
+    def get_sage_x_y(self):
+        return np.zeros(0), np.zeros(0)
+
+
 class SMF_Red(Constraint):
     """Base class for Red/Quiescent SMF constraints"""
 
@@ -1001,10 +1076,8 @@ class BHBM(Constraint):
         x = BulgeMass[mask]
         
         if len(x) < 10:  # Not enough points for reliable median
-            # Return dummy arrays that will result in poor fit
-            yerr_dummy = np.array([999.0, 999.0])
-            return np.array([8.0, 12.0]), np.array([6.0, 8.0]), yerr_dummy
-        
+            return np.array([8.0, 12.0]), np.array([6.0, 8.0]), np.array([0.3, 0.3])
+
         # Create bins for bulge mass and calculate median black hole mass in each bin
         bin_edges = np.arange(8.0, 12.1, 0.2)  # Bins every 0.2 dex
         bin_centers = []
@@ -1023,9 +1096,8 @@ class BHBM(Constraint):
                 bin_errors.append(std_bin / np.sqrt(N_bin))
         
         if len(bin_centers) < 3:  # Not enough bins for reliable relation
-            yerr_dummy = np.array([999.0, 999.0])
-            return np.array([8.0, 12.0]), np.array([6.0, 8.0]), yerr_dummy
-        
+            return np.array([8.0, 12.0]), np.array([6.0, 8.0]), np.array([0.3, 0.3])
+
         return np.array(bin_centers), np.array(median_bh_mass), np.array(bin_errors)
 
     def get_obs_x_y_err(self):
@@ -1231,7 +1303,7 @@ class MZR(Constraint):
     def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr):
         # Bin the metallicity data by stellar mass
         if len(stellar_mass_mzr) < 10:
-            yerr_dummy = np.array([999.0, 999.0])
+            yerr_dummy = np.array([0.3, 0.3])
             return np.array([9.0, 11.0]), np.array([8.5, 9.0]), yerr_dummy
 
         bin_edges = np.arange(8.0, 11.5, 0.25)
@@ -1249,7 +1321,7 @@ class MZR(Constraint):
                 bin_errors.append(std_bin / np.sqrt(N_bin))
 
         if len(bin_centers) < 3:
-            yerr_dummy = np.array([999.0, 999.0])
+            yerr_dummy = np.array([0.3, 0.3])
             return np.array([9.0, 11.0]), np.array([8.5, 9.0]), yerr_dummy
 
         return np.array(bin_centers), np.array(median_met), np.array(bin_errors)
@@ -1289,7 +1361,7 @@ class SHMR(Constraint):
     def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr):
         # Bin the SHMR data by halo mass
         if len(halo_mass_shmr) < 10:
-            yerr_dummy = np.array([999.0, 999.0])
+            yerr_dummy = np.array([0.3, 0.3])
             return np.array([11.0, 14.0]), np.array([8.0, 11.0]), yerr_dummy
 
         bin_edges = np.arange(10.5, 15.1, 0.25)
@@ -1307,7 +1379,7 @@ class SHMR(Constraint):
                 bin_errors.append(std_bin / np.sqrt(N_bin))
 
         if len(bin_centers) < 3:
-            yerr_dummy = np.array([999.0, 999.0])
+            yerr_dummy = np.array([0.3, 0.3])
             return np.array([11.0, 14.0]), np.array([8.0, 11.0]), yerr_dummy
 
         return np.array(bin_centers), np.array(median_stellar), np.array(bin_errors)
@@ -1329,6 +1401,8 @@ _constraint_re = re.compile((r'([0-9_a-zA-Z]+)' # name
 def parse(spec, snapshot=None, sim=None, boxsize=None, vol_frac=None, age_alist_file=None, Omega0=None, h0=None, output_dir=None):
     """Parses a comma-separated string of constraint names into a list of
     Constraint objects. Specific domain values can be specified in `spec`"""
+    from src.simulation_config import get_snapshot_map as _get_snapshot_map
+    _snapshot_map = _get_snapshot_map(sim if sim is not None else 0)
 
     _constraints = {
         'BHMF_z0': BHMF_z0,
@@ -1339,6 +1413,11 @@ def parse(spec, snapshot=None, sim=None, boxsize=None, vol_frac=None, age_alist_
         'SMF_z20': SMF_z20,
         'SMF_z30': SMF_z30,
         'SMF_z40': SMF_z40,
+        'SMF_z50': SMF_z50,
+        'SMF_z60': SMF_z60,
+        'SMF_z70': SMF_z70,
+        'SMF_z80': SMF_z80,
+        'SMF_z100': SMF_z100,
         'SMF_Red_z0': SMF_Red_z0,
         'SMF_Blue_z0': SMF_Blue_z0,
         'BHBM': BHBM,
@@ -1354,7 +1433,10 @@ def parse(spec, snapshot=None, sim=None, boxsize=None, vol_frac=None, age_alist_
         m = _constraint_re.match(s)
         if not m or m.group(1) not in _constraints:
             raise ValueError('Constraint does not specify a valid constraint: %s' % s)
-        c = _constraints[m.group(1)](snapshot=snapshot, sim=sim, boxsize=boxsize, vol_frac=vol_frac, age_alist_file=age_alist_file,
+        # Use the per-constraint snapshot from the simulation map, not the combined list
+        constraint_name = m.group(1)
+        per_constraint_snapshot = _snapshot_map.get(constraint_name, snapshot)
+        c = _constraints[constraint_name](snapshot=per_constraint_snapshot, sim=sim, boxsize=boxsize, vol_frac=vol_frac, age_alist_file=age_alist_file,
                                      Omega0=Omega0, h0=h0, output_dir=output_dir)
         if m.group(2):
             dn, up = float(m.group(2)), float(m.group(3))

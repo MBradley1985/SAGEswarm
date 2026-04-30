@@ -31,7 +31,7 @@ import pandas as pd # type: ignore
 import matplotlib.colors # type: ignore
 from src.redshift_utils import get_redshift_info, get_all_redshifts
 from scipy import stats
-from sklearn.linear_model import LinearRegression
+# from sklearn.linear_model import LinearRegression
 import matplotlib.colors as cols
 from src.pso_uncertainty import analyze_pso_uncertainties, plot_parameter_distributions, \
                          create_uncertainty_report, analyze_and_plot
@@ -756,28 +756,24 @@ def load_ilbert_data(config_opts):
 def load_gama_red_data(config_opts):
     """Load GAMA morphological SMF data for Red/Quiescent (E+HE) galaxies at z=0"""
     DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
-    # skiprows=15 to skip 14 comment lines + 1 header row in the ECSV file
-    gama_mass, gama_E_HE, _ = np.loadtxt(os.path.join(DATA_DIR, 'gama_smf_morph.ecsv'), usecols=[0,1,2], unpack=True, skiprows=15)
-
-    # Filter out NaN values
+    path = os.path.join(DATA_DIR, 'gama_smf_morph.ecsv')
+    if not os.path.exists(path):
+        logger.warning(f"gama_smf_morph.ecsv not found at {path}, skipping red SMF diagnostic")
+        return None
+    gama_mass, gama_E_HE, _ = np.loadtxt(path, usecols=[0,1,2], unpack=True, skiprows=15)
     valid = ~np.isnan(gama_E_HE)
-    x_obs = gama_mass[valid]
-    y_obs = gama_E_HE[valid]
-
-    return x_obs, y_obs, 'GAMA E+HE (Red)'
+    return gama_mass[valid], gama_E_HE[valid], 'GAMA E+HE (Red)'
 
 def load_gama_blue_data(config_opts):
     """Load GAMA morphological SMF data for Blue/Star-forming (D) galaxies at z=0"""
     DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
-    # skiprows=15 to skip 14 comment lines + 1 header row in the ECSV file
-    gama_mass, gama_D, _ = np.loadtxt(os.path.join(DATA_DIR, 'gama_smf_morph.ecsv'), usecols=[0,7,8], unpack=True, skiprows=15)
-
-    # Filter out NaN values
+    path = os.path.join(DATA_DIR, 'gama_smf_morph.ecsv')
+    if not os.path.exists(path):
+        logger.warning(f"gama_smf_morph.ecsv not found at {path}, skipping blue SMF diagnostic")
+        return None
+    gama_mass, gama_D, _ = np.loadtxt(path, usecols=[0,7,8], unpack=True, skiprows=15)
     valid = ~np.isnan(gama_D)
-    x_obs = gama_mass[valid]
-    y_obs = gama_D[valid]
-
-    return x_obs, y_obs, 'GAMA Disk (Blue)'
+    return gama_mass[valid], gama_D[valid], 'GAMA Disk (Blue)'
 
 def load_sage_smf_red_data():
     """Load SAGE Red SMF data"""
@@ -837,35 +833,35 @@ def get_smf_files_map(config_opts):
     wright_z1_data = load_wright_z1_data(config_opts)
     wright_z2_data = load_wright_z2_data(config_opts)
     
-    logger.info("Checking for SMF dump files in directory...")
+    logger.debug("Checking for SMF dump files in directory...")
     smf_files = {}
     
     # Handle z=0 case specially since it uses GAMA data
     filename = f'SMF_z0_dump.txt'
     filepath = os.path.join(config_opts.outdir, filename)
     if os.path.exists(filepath):
-        logger.info(f"Found: {filename}")
+        logger.debug(f"Found: {filename}")
         smf_files[filename] = (gama_data, sage_data[0.0])
     else:
-        logger.info(f"Not found: {filename}")
+        logger.debug(f"Not found: {filename}")
 
     # Handle z=0 case specially since it uses GAMA data
     filename = f'SMF_z10_dump.txt'
     filepath = os.path.join(config_opts.outdir, filename)
     if os.path.exists(filepath):
-        logger.info(f"Found: {filename}")
+        logger.debug(f"Found: {filename}")
         smf_files[filename] = (wright_z1_data, sage_data[1.0])
     else:
-        logger.info(f"Not found: {filename}")
+        logger.debug(f"Not found: {filename}")
 
     # Handle z=0 case specially since it uses GAMA data
     filename = f'SMF_z20_dump.txt'
     filepath = os.path.join(config_opts.outdir, filename)
     if os.path.exists(filepath):
-        logger.info(f"Found: {filename}")
+        logger.debug(f"Found: {filename}")
         smf_files[filename] = (wright_z2_data, sage_data[2.0])
     else:
-        logger.info(f"Not found: {filename}")
+        logger.debug(f"Not found: {filename}")
     
     # Handle all other redshifts using Shuntov data
     for z in get_all_redshifts():
@@ -878,50 +874,60 @@ def get_smf_files_map(config_opts):
         filename = f'SMF_z{z_str}_dump.txt'
         filepath = os.path.join(config_opts.outdir, filename)
         if os.path.exists(filepath):
-            logger.info(f"Found: {filename}")
+            if z not in shuntov_data:
+                logger.warning(f"No Shuntov observational data for z={z}, skipping {filename}")
+                continue
+            if z not in sage_data:
+                logger.warning(f"No SAGE reference data for z={z}, skipping {filename}")
+                continue
+            logger.debug(f"Found: {filename}")
             smf_files[filename] = (shuntov_data[z], sage_data[z])
         else:
-            logger.info(f"Not found: {filename}")
-    
-    logger.info(f"Found {len(smf_files)} SMF files to process")
+            logger.debug(f"Not found: {filename}")
+
+    logger.debug(f"Found {len(smf_files)} SMF files to process")
     return smf_files
 
 def get_smf_red_files_map(config_opts):
     """Create mapping of SMF Red dump files to their corresponding observational data"""
     gama_red_data = load_gama_red_data(config_opts)
+    if gama_red_data is None:
+        return {}
     sage_red_data = load_sage_smf_red_data()
 
-    logger.info("Checking for SMF_Red dump files in directory...")
+    logger.debug("Checking for SMF_Red dump files in directory...")
     smf_red_files = {}
 
     filename = 'SMF_Red_z0_dump.txt'
     filepath = os.path.join(config_opts.outdir, filename)
     if os.path.exists(filepath):
-        logger.info(f"Found: {filename}")
+        logger.debug(f"Found: {filename}")
         smf_red_files[filename] = (gama_red_data, sage_red_data[0.0])
     else:
-        logger.info(f"Not found: {filename}")
+        logger.debug(f"Not found: {filename}")
 
-    logger.info(f"Found {len(smf_red_files)} SMF_Red files to process")
+    logger.debug(f"Found {len(smf_red_files)} SMF_Red files to process")
     return smf_red_files
 
 def get_smf_blue_files_map(config_opts):
     """Create mapping of SMF Blue dump files to their corresponding observational data"""
     gama_blue_data = load_gama_blue_data(config_opts)
+    if gama_blue_data is None:
+        return {}
     sage_blue_data = load_sage_smf_blue_data()
 
-    logger.info("Checking for SMF_Blue dump files in directory...")
+    logger.debug("Checking for SMF_Blue dump files in directory...")
     smf_blue_files = {}
 
     filename = 'SMF_Blue_z0_dump.txt'
     filepath = os.path.join(config_opts.outdir, filename)
     if os.path.exists(filepath):
-        logger.info(f"Found: {filename}")
+        logger.debug(f"Found: {filename}")
         smf_blue_files[filename] = (gama_blue_data, sage_blue_data[0.0])
     else:
-        logger.info(f"Not found: {filename}")
+        logger.debug(f"Not found: {filename}")
 
-    logger.info(f"Found {len(smf_blue_files)} SMF_Blue files to process")
+    logger.debug(f"Found {len(smf_blue_files)} SMF_Blue files to process")
     return smf_blue_files
 
 def get_bhmf_files_map(config_opts):
@@ -930,7 +936,7 @@ def get_bhmf_files_map(config_opts):
     zhang_data = load_zhang_data()
     sage_data = load_sage_data_forBHMF()
     
-    logger.info("Checking for BHMF dump files in directory...")
+    logger.debug("Checking for BHMF dump files in directory...")
     bhmf_files = {}
     
     for z in get_all_redshifts():
@@ -941,12 +947,15 @@ def get_bhmf_files_map(config_opts):
         filename = f'BHMF_z{z_str}_dump.txt'
         filepath = os.path.join(config_opts.outdir, filename)
         if os.path.exists(filepath):
-            logger.info(f"Found: {filename}")
+            if z not in zhang_data or z not in sage_data:
+                logger.warning(f"No data for z={z}, skipping {filename}")
+                continue
+            logger.debug(f"Found: {filename}")
             bhmf_files[filename] = (zhang_data[z], sage_data[z])
         else:
-            logger.info(f"Not found: {filename}")
+            logger.debug(f"Not found: {filename}")
     
-    logger.info(f"Found {len(bhmf_files)} BHMF files to process")
+    logger.debug(f"Found {len(bhmf_files)} BHMF files to process")
     return bhmf_files
 
 def get_bhbm_files_map(config_opts):
@@ -954,7 +963,7 @@ def get_bhbm_files_map(config_opts):
     # Load observational and SAGE data
     bhbm_data = load_bhbm_data()
     
-    logger.info("Checking for BHBM dump files in directory...")
+    logger.debug("Checking for BHBM dump files in directory...")
     bhbm_files = {}
     
     for z in get_all_redshifts():
@@ -962,19 +971,19 @@ def get_bhbm_files_map(config_opts):
         if z_str is None:
             continue
         if z not in bhbm_data:
-            logger.info(f"No BHBM data for z={z}, skipping.")
+            logger.debug(f"No BHBM data for z={z}, skipping.")
             continue
         filename = f'BHBM_dump.txt'
         filepath = os.path.join(config_opts.outdir, filename)
         if os.path.exists(filepath):
-            logger.info(f"Found: {filename}")
+            logger.debug(f"Found: {filename}")
             obs_data, sage_data = bhbm_data[z]
             bhbm_files[filename] = (obs_data, sage_data)
         else:
-            logger.info(f"Not found: {filename}")
+            logger.debug(f"Not found: {filename}")
   
     
-    logger.info(f"Found {len(bhbm_files)} BHBM files to process")
+    logger.debug(f"Found {len(bhbm_files)} BHBM files to process")
     return bhbm_files
 
 
@@ -1074,18 +1083,18 @@ def get_himf_files_map(config_opts):
     obs_data = load_himf_obs_data()
     sage_data = load_sage_himf_data()
 
-    logger.info("Checking for HIMF dump files in directory...")
+    logger.debug("Checking for HIMF dump files in directory...")
     files = {}
 
     filename = 'HIMF_dump.txt'
     filepath = os.path.join(config_opts.outdir, filename)
     if os.path.exists(filepath):
-        logger.info(f"Found: {filename}")
+        logger.debug(f"Found: {filename}")
         files[filename] = (obs_data, sage_data)
     else:
-        logger.info(f"Not found: {filename}")
+        logger.debug(f"Not found: {filename}")
 
-    logger.info(f"Found {len(files)} HIMF files to process")
+    logger.debug(f"Found {len(files)} HIMF files to process")
     return files
 
 
@@ -1114,18 +1123,18 @@ def get_h2mf_files_map(config_opts):
     obs_data = load_h2mf_obs_data()
     sage_data = load_sage_h2mf_data()
 
-    logger.info("Checking for H2MF dump files in directory...")
+    logger.debug("Checking for H2MF dump files in directory...")
     files = {}
 
     filename = 'H2MF_dump.txt'
     filepath = os.path.join(config_opts.outdir, filename)
     if os.path.exists(filepath):
-        logger.info(f"Found: {filename}")
+        logger.debug(f"Found: {filename}")
         files[filename] = (obs_data, sage_data)
     else:
-        logger.info(f"Not found: {filename}")
+        logger.debug(f"Not found: {filename}")
 
-    logger.info(f"Found {len(files)} H2MF files to process")
+    logger.debug(f"Found {len(files)} H2MF files to process")
     return files
 
 
@@ -1147,18 +1156,18 @@ def get_mzr_files_map(config_opts):
         logger.warning(f"Could not load sage_mzr_all_redshifts.csv: {e}")
         sage_data = (np.array([9.0, 11.0]), np.array([8.5, 9.0]), 'SAGE')
 
-    logger.info("Checking for MZR dump files in directory...")
+    logger.debug("Checking for MZR dump files in directory...")
     files = {}
 
     filename = 'MZR_dump.txt'
     filepath = os.path.join(config_opts.outdir, filename)
     if os.path.exists(filepath):
-        logger.info(f"Found: {filename}")
+        logger.debug(f"Found: {filename}")
         files[filename] = (obs_data, sage_data)
     else:
-        logger.info(f"Not found: {filename}")
+        logger.debug(f"Not found: {filename}")
 
-    logger.info(f"Found {len(files)} MZR files to process")
+    logger.debug(f"Found {len(files)} MZR files to process")
     return files
 
 
@@ -1213,18 +1222,18 @@ def get_shmr_files_map(config_opts):
         logger.warning(f"Could not load sage_halostellar_all_redshifts.csv: {e}")
         sage_data = (np.array([12.0, 14.0]), np.array([10.0, 11.0]), 'SAGE (Error)')
 
-    logger.info("Checking for SHMR dump files in directory...")
+    logger.debug("Checking for SHMR dump files in directory...")
     files = {}
 
     filename = 'SHMR_dump.txt'
     filepath = os.path.join(config_opts.outdir, filename)
     if os.path.exists(filepath):
-        logger.info(f"Found: {filename}")
+        logger.debug(f"Found: {filename}")
         files[filename] = (obs_data, sage_data)
     else:
-        logger.info(f"Not found: {filename}")
+        logger.debug(f"Not found: {filename}")
 
-    logger.info(f"Found {len(files)} SHMR files to process")
+    logger.debug(f"Found {len(files)} SHMR files to process")
     return files
 
 
@@ -1243,18 +1252,18 @@ def get_smd_files_map(config_opts):
     else:
         sage_data = (np.array([0.0, 2.0]), np.array([8.0, 7.5]), 'SAGE')
 
-    logger.info("Checking for SMD dump files in directory...")
+    logger.debug("Checking for SMD dump files in directory...")
     files = {}
 
     filename = 'SMD_dump.txt'
     filepath = os.path.join(config_opts.outdir, filename)
     if os.path.exists(filepath):
-        logger.info(f"Found: {filename}")
+        logger.debug(f"Found: {filename}")
         files[filename] = (obs_data, sage_data)
     else:
-        logger.info(f"Not found: {filename}")
+        logger.debug(f"Not found: {filename}")
 
-    logger.info(f"Found {len(files)} SMD files to process")
+    logger.debug(f"Found {len(files)} SMD files to process")
     return files
 
 
@@ -1287,18 +1296,18 @@ def get_csfrdh_files_map(config_opts):
         # Fallback only if file missing
         sage_data = (np.array([0.0, 10.0]), np.array([-1.0, -2.0]), 'SAGE')
 
-    logger.info("Checking for CSFRDH dump files in directory...")
+    logger.debug("Checking for CSFRDH dump files in directory...")
     files = {}
 
     filename = 'CSFRDH_dump.txt'
     filepath = os.path.join(config_opts.outdir, filename)
     if os.path.exists(filepath):
-        logger.info(f"Found: {filename}")
+        logger.debug(f"Found: {filename}")
         files[filename] = (obs_data, sage_data)
     else:
-        logger.info(f"Not found: {filename}")
+        logger.debug(f"Not found: {filename}")
 
-    logger.info(f"Found {len(files)} CSFRDH files to process")
+    logger.debug(f"Found {len(files)} CSFRDH files to process")
     return files
 
 
@@ -1445,6 +1454,159 @@ def get_aligned_parameter_values(track_files, n_particles, n_iterations, skip_it
     
     return param_values
 
+def _kde_contour_levels(ZZ, x_grid, y_grid, fractions=(0.68, 0.95)):
+    """Return Z thresholds enclosing the given probability mass fractions."""
+    dx = x_grid[1] - x_grid[0]
+    dy = y_grid[1] - y_grid[0]
+    z_sorted = np.sort(ZZ.ravel())[::-1]
+    cumulative = np.cumsum(z_sorted) * dx * dy
+    cumulative /= cumulative[-1]
+    levels = []
+    for f in sorted(fractions, reverse=True):
+        idx = np.searchsorted(cumulative, f)
+        idx = min(idx, len(z_sorted) - 1)
+        levels.append(z_sorted[idx])
+    return sorted(set(levels))
+
+
+def plot_pso_corner(pos, fx, space, output_dir):
+    """
+    Traditional corner plot of all PSO evaluations.
+    Off-diagonal: weighted 2-D KDE contours at 68% and 95% credible regions.
+    Diagonal: weighted 1-D KDE curve with best-fit marked.
+    Weights: exp(-Δchi²/2) so better-fitting particles contribute more.
+    """
+    from scipy.stats import gaussian_kde
+    from matplotlib.patches import Patch
+    from matplotlib.lines import Line2D
+
+    S, D, L = pos.shape
+
+    # Flatten all (particle, iteration) evaluations → (N, D)
+    all_pos = pos.transpose(2, 0, 1).reshape(S * L, D)
+    all_fx  = fx.T.reshape(S * L)
+
+    # Drop penalty / non-finite scores
+    good = np.isfinite(all_fx) & (all_fx < 1e9)
+    all_pos = all_pos[good]
+    all_fx  = all_fx[good]
+
+    if len(all_fx) == 0:
+        logger.warning("No valid evaluations for corner plot — skipping")
+        return
+
+    labels   = [str(lbl) for lbl in space['plot_label']]
+    best_idx = np.argmin(all_fx)
+
+    # Bayesian-style weights: exp(-Δchi²/2), normalised
+    weights = np.exp(-0.5 * (all_fx - all_fx.min()))
+    weights /= weights.sum()
+
+    fig, axes = plt.subplots(D, D, figsize=(2.8 * D, 2.8 * D))
+    if D == 1:
+        axes = np.array([[axes]])
+    plt.subplots_adjust(hspace=0.05, wspace=0.05)
+
+    FILL_95  = '#c6dbef'   # light blue  — outer 95% region
+    FILL_68  = '#6baed6'   # mid blue    — inner 68% region
+    LINE_95  = '#2171b5'
+    LINE_68  = '#084594'
+
+    for row in range(D):
+        for col in range(D):
+            ax = axes[row, col]
+
+            if col > row:
+                ax.set_visible(False)
+                continue
+
+            x_data = all_pos[:, col]
+
+            if row == col:
+                # Diagonal: weighted 1-D KDE
+                try:
+                    kde = gaussian_kde(x_data, weights=weights)
+                    x_grid = np.linspace(x_data.min(), x_data.max(), 300)
+                    dens = kde(x_grid)
+                    ax.fill_between(x_grid, dens, alpha=0.35, color=FILL_68)
+                    ax.plot(x_grid, dens, color=LINE_68, lw=1.5)
+                except Exception:
+                    ax.hist(x_data, bins=25, weights=weights * len(weights),
+                            color=FILL_68, edgecolor='white', lw=0.5, density=True)
+                ax.axvline(all_pos[best_idx, col], color='red', lw=1.5, ls='--')
+                ax.set_yticks([])
+
+            else:
+                # Off-diagonal: 2-D weighted KDE contours
+                y_data = all_pos[:, row]
+                try:
+                    kde2d = gaussian_kde(np.vstack([x_data, y_data]), weights=weights)
+                    nx, ny = 80, 80
+                    x_grid = np.linspace(x_data.min(), x_data.max(), nx)
+                    y_grid = np.linspace(y_data.min(), y_data.max(), ny)
+                    XX, YY = np.meshgrid(x_grid, y_grid)
+                    ZZ = kde2d(np.vstack([XX.ravel(), YY.ravel()])).reshape(ny, nx)
+
+                    levels = _kde_contour_levels(ZZ, x_grid, y_grid)
+
+                    if len(levels) >= 2:
+                        ax.contourf(XX, YY, ZZ,
+                                    levels=[levels[0], ZZ.max()],
+                                    colors=[FILL_95], alpha=0.7)
+                        ax.contourf(XX, YY, ZZ,
+                                    levels=[levels[1], ZZ.max()],
+                                    colors=[FILL_68], alpha=0.8)
+                        ax.contour(XX, YY, ZZ, levels=levels,
+                                   colors=[LINE_95, LINE_68], linewidths=1.0)
+                    else:
+                        ax.contourf(XX, YY, ZZ,
+                                    levels=[levels[0], ZZ.max()],
+                                    colors=[FILL_68], alpha=0.8)
+                        ax.contour(XX, YY, ZZ, levels=levels,
+                                   colors=[LINE_68], linewidths=1.0)
+
+                    ax.scatter(all_pos[best_idx, col], all_pos[best_idx, row],
+                               marker='*', s=140, c='red', zorder=10,
+                               edgecolors='black', linewidths=0.8)
+                except Exception as e:
+                    logger.debug(f"KDE failed for ({col},{row}): {e} — using scatter fallback")
+                    ax.scatter(x_data, y_data, c=FILL_68, s=4, alpha=0.4, linewidths=0)
+                    ax.scatter(all_pos[best_idx, col], all_pos[best_idx, row],
+                               marker='*', s=140, c='red', zorder=10)
+
+            # Labels on outer edges only
+            if row == D - 1:
+                ax.set_xlabel(labels[col], fontsize=10)
+            else:
+                ax.set_xticklabels([])
+            if col == 0 and row != 0:
+                ax.set_ylabel(labels[row], fontsize=10)
+            else:
+                ax.set_yticklabels([])
+            ax.tick_params(labelsize=7)
+
+    # Legend
+    legend_elements = [
+        Patch(facecolor=FILL_95, alpha=0.7, edgecolor=LINE_95, label='95%'),
+        Patch(facecolor=FILL_68, alpha=0.8, edgecolor=LINE_68, label='68%'),
+        Line2D([0], [0], color='red', lw=1.5, ls='--', label='Best fit'),
+    ]
+    fig.legend(handles=legend_elements, loc='upper right',
+               bbox_to_anchor=(0.98, 0.98), fontsize=8, framealpha=0.9)
+
+    # Best-fit annotation
+    best_str = '  '.join(f'{labels[k]}={all_pos[best_idx, k]:.3g}' for k in range(D))
+    fig.text(0.12, 0.97,
+             f'Best (\u2605): {best_str}\n'
+             f'$\\chi^2_\\mathrm{{red}}$ = {all_fx[best_idx]:.3f}   ({len(all_fx)} evaluations)',
+             fontsize=8, va='top', family='monospace')
+
+    outfile = os.path.join(output_dir, 'pso_corner.pdf')
+    fig.savefig(outfile, bbox_inches='tight', dpi=150)
+    plt.close(fig)
+    logger.info(f"Corner plot saved to {outfile}")
+
+
 def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
     logger.info("Starting diagnostics analysis...")
 
@@ -1458,40 +1620,46 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
     num_particles = S
     num_iterations = L
 
+    # Corner plot — always produced regardless of which constraints were active
+    try:
+        plot_pso_corner(pos, fx, space, output_dir)
+    except Exception as e:
+        logger.error(f"Error creating corner plot: {e}")
+
     # Get SMF and BHMF files mapping with observational data
     logger.info("Looking for dump files...")
     smf_files = get_smf_files_map(config_opts)
-    logger.info(f"Found {len(smf_files)} SMF files to process")
+    logger.debug(f"Found {len(smf_files)} SMF files to process")
 
     smf_red_files = get_smf_red_files_map(config_opts)
-    logger.info(f"Found {len(smf_red_files)} SMF_Red files to process")
+    logger.debug(f"Found {len(smf_red_files)} SMF_Red files to process")
 
     smf_blue_files = get_smf_blue_files_map(config_opts)
-    logger.info(f"Found {len(smf_blue_files)} SMF_Blue files to process")
+    logger.debug(f"Found {len(smf_blue_files)} SMF_Blue files to process")
 
     bhmf_files = get_bhmf_files_map(config_opts)
-    logger.info(f"Found {len(bhmf_files)} BHMF files to process")
+    logger.debug(f"Found {len(bhmf_files)} BHMF files to process")
 
     bhbm_files = get_bhbm_files_map(config_opts)
-    logger.info(f"Found {len(bhbm_files)} BHBM files to process")
+    logger.debug(f"Found {len(bhbm_files)} BHBM files to process")
 
     himf_files = get_himf_files_map(config_opts)
-    logger.info(f"Found {len(himf_files)} HIMF files to process")
+    logger.debug(f"Found {len(himf_files)} HIMF files to process")
 
     h2mf_files = get_h2mf_files_map(config_opts)
-    logger.info(f"Found {len(h2mf_files)} H2MF files to process")
+    logger.debug(f"Found {len(h2mf_files)} H2MF files to process")
 
     mzr_files = get_mzr_files_map(config_opts)
-    logger.info(f"Found {len(mzr_files)} MZR files to process")
+    logger.debug(f"Found {len(mzr_files)} MZR files to process")
 
     shmr_files = get_shmr_files_map(config_opts)
-    logger.info(f"Found {len(shmr_files)} SHMR files to process")
+    logger.debug(f"Found {len(shmr_files)} SHMR files to process")
 
     smd_files = get_smd_files_map(config_opts)
-    logger.info(f"Found {len(smd_files)} SMD files to process")
+    logger.debug(f"Found {len(smd_files)} SMD files to process")
 
     csfrdh_files = get_csfrdh_files_map(config_opts)
-    logger.info(f"Found {len(csfrdh_files)} CSFRDH files to process")
+    logger.debug(f"Found {len(csfrdh_files)} CSFRDH files to process")
 
     # Process SMF files
     processed_any_smf = False
@@ -1521,7 +1689,7 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
                 logger.error(f"Error creating iteration plot: {str(e)}")
 
     if not processed_any_smf:
-        logger.info("Warning: No SMF files were found to process!")
+        logger.debug("Warning: No SMF files were found to process!")
         logger.info(f"Expected files in: {output_dir}")
         logger.info("Expected files: %s", list(smf_files.keys()))
 
@@ -1554,7 +1722,7 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
                 logger.error(f"Error creating iteration plot: {str(e)}")
 
     if not processed_any_smf_red:
-        logger.info("Warning: No SMF_Red files were found to process!")
+        logger.debug("Warning: No SMF_Red files were found to process!")
         logger.info(f"Expected files in: {output_dir}")
         logger.info("Expected files: %s", list(smf_red_files.keys()))
 
@@ -1587,7 +1755,7 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
                 logger.error(f"Error creating iteration plot: {str(e)}")
 
     if not processed_any_smf_blue:
-        logger.info("Warning: No SMF_Blue files were found to process!")
+        logger.debug("Warning: No SMF_Blue files were found to process!")
         logger.info(f"Expected files in: {output_dir}")
         logger.info("Expected files: %s", list(smf_blue_files.keys()))
 
@@ -1619,7 +1787,7 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
                 logger.error(f"Error creating iteration plot: {str(e)}")
  
     if not processed_any_bhmf:
-        logger.info("Warning: No BHMF files were found to process!")
+        logger.debug("Warning: No BHMF files were found to process!")
         logger.info(f"Expected files in: {output_dir}")
         logger.info("Expected files: %s", list(bhmf_files.keys())) 
 
@@ -1651,7 +1819,7 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
                 logger.error(f"Error creating iteration plot: {str(e)}")
 
     if not processed_any_bhbm:
-        logger.info("Warning: No BHBM files were found to process!")
+        logger.debug("Warning: No BHBM files were found to process!")
         logger.info(f"Expected files in: {output_dir}")
         logger.info("Expected files: %s", list(bhbm_files.keys()))
 
@@ -1682,7 +1850,7 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
                 logger.error(f"Error creating iteration plot: {str(e)}")
 
     if not processed_any_himf:
-        logger.info("Warning: No HIMF files were found to process!")
+        logger.debug("Warning: No HIMF files were found to process!")
 
     # Process H2MF files
     processed_any_h2mf = False
@@ -1711,7 +1879,7 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
                 logger.error(f"Error creating iteration plot: {str(e)}")
 
     if not processed_any_h2mf:
-        logger.info("Warning: No H2MF files were found to process!")
+        logger.debug("Warning: No H2MF files were found to process!")
 
     # Process MZR files
     processed_any_mzr = False
@@ -1740,7 +1908,7 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
                 logger.error(f"Error creating iteration plot: {str(e)}")
 
     if not processed_any_mzr:
-        logger.info("Warning: No MZR files were found to process!")
+        logger.debug("Warning: No MZR files were found to process!")
 
     # Process SHMR files
     processed_any_shmr = False
@@ -1769,7 +1937,7 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
                 logger.error(f"Error creating iteration plot: {str(e)}")
 
     if not processed_any_shmr:
-        logger.info("Warning: No SHMR files were found to process!")
+        logger.debug("Warning: No SHMR files were found to process!")
 
     # Process SMD files
     processed_any_smd = False
@@ -1798,7 +1966,7 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
                 logger.error(f"Error creating iteration plot: {str(e)}")
 
     if not processed_any_smd:
-        logger.info("Warning: No SMD files were found to process!")
+        logger.debug("Warning: No SMD files were found to process!")
 
     # Process CSFRDH files
     processed_any_csfrdh = False
@@ -1827,7 +1995,7 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
                 logger.error(f"Error creating iteration plot: {str(e)}")
 
     if not processed_any_csfrdh:
-        logger.info("Warning: No CSFRDH files were found to process!")
+        logger.debug("Warning: No CSFRDH files were found to process!")
 
     # Load parameter values
     logger.info("Processing parameter evolution...")

@@ -5,6 +5,7 @@ import multiprocessing
 import os
 import shutil
 import subprocess
+import sys
 import time
 import numpy as np # type: ignore
 from src import common
@@ -46,7 +47,7 @@ def count_jobs(job_name, username=None):
 
 #This is the original function and is just fine
 def _exec_sage(msg, cmdline, cwd=None):
-    logger.info('%s with command line: %s', msg, subprocess.list2cmdline(cmdline))
+    logger.debug('%s with command line: %s', msg, subprocess.list2cmdline(cmdline))
     out, err, code = common.exec_command(cmdline, cwd=cwd)
     if code != 0:
         logger.error('Error while executing %s (exit code %d):\n' +
@@ -54,28 +55,22 @@ def _exec_sage(msg, cmdline, cwd=None):
                      common.b2s(out), common.b2s(err))
         raise RuntimeError('%s error' % cmdline[0])
 
+def _to_physical(value, is_log):
+    """Convert a PSO particle value back to physical space."""
+    return 10.0 ** value if is_log else value
+
+def _print_progress(done, total, iteration):
+    bar_width = 30
+    filled = int(bar_width * done / total) if total > 0 else 0
+    bar = '\u2588' * filled + '\u2591' * (bar_width - filled)
+    sys.stdout.write(f'\r  Iteration {iteration + 1}  [{bar}]  {done}/{total} particles complete  ')
+    sys.stdout.flush()
+
 def _evaluate(constraint, stat_test, modeldir, subvols):
     y_obs, y_mod, err = constraint.get_data(modeldir, subvols)
-    
-    # Debug: write to file to verify data is correct
-    constraint_name = constraint.__class__.__name__
-    debug_file = os.path.join(os.path.dirname(modeldir), 'constraint_debug.txt')
-    with open(debug_file, 'a') as f:
-        f.write(f"\n=== {constraint_name} Evaluation Debug ===\n")
-        f.write(f"Number of data points: {len(y_obs)}\n")
-        f.write(f"y_obs (first 5): {y_obs[:5]}\n")
-        f.write(f"y_obs (last 5): {y_obs[-5:]}\n")
-        f.write(f"y_obs min/max: {np.min(y_obs):.3f} / {np.max(y_obs):.3f}\n")
-        f.write(f"y_obs all same? {np.all(y_obs == y_obs[0])}\n")
-        f.write(f"err (first 5): {err[:5]}\n")
-    
     score = stat_test(y_obs, y_mod, err)
-    
-    with open(debug_file, 'a') as f:
-        f.write(f"Chi-squared score: {score:.2f}\n")
-        f.write("="*50 + "\n")
-    
-    return score
+    n = len(y_obs)
+    return score / n if n > 0 else score   # reduced chi² — equal weight per data point
 
 count = 0
 def run_sage_hpc(particles, *args):
@@ -122,7 +117,8 @@ def run_sage_hpc(particles, *args):
                         lines[l] = f'OutputDir              {work_dir}\n'
                     for p, name in enumerate(space['name']):
                         if line[:len(name)] == name:
-                            lines[l] = f'{name}          {str(round(particle[p],5))}\n'
+                            phys = _to_physical(particle[p], space['is_log'][p])
+                            lines[l] = f'{name}          {phys:.6g}\n'
                             Ndone += 1
                     if Ndone == len(space['name']):
                         break
@@ -186,17 +182,16 @@ def run_sage_hpc(particles, *args):
             processes.append((i, jobid, temp_filename, particle_dir, batch_script))
 
         # Wait for all SLURM jobs to complete
-        logger.info('Waiting for all SLURM jobs to complete...')
-        #while True:
-            #if count_jobs(job_name) == 0:
-                #break
-            #time.sleep(40)
+        total_particles = len(processes)
         while True:
-            if count_jobs(job_name, opts.username) == 0:
-                # Add delay to allow file system to settle
-                time.sleep(2)  
+            remaining = count_jobs(job_name)
+            _print_progress(total_particles - remaining, total_particles, count)
+            if remaining == 0:
+                time.sleep(2)
                 break
             time.sleep(10)
+        sys.stdout.write('\n')
+        sys.stdout.flush()
 
     else:
         # Use MPI implementation for small CPU requests
@@ -220,13 +215,12 @@ def run_sage_hpc(particles, *args):
                         lines[l] = f'OutputDir              {particle_dir}\n'
                     for p, name in enumerate(space['name']):
                         if line[:len(name)] == name:
-                            lines[l] = f'{name}          {str(round(particle[p],5))}\n'
+                            phys = _to_physical(particle[p], space['is_log'][p])
+                            lines[l] = f'{name}          {phys:.6g}\n'
                             Ndone += 1
                     if Ndone == len(space['name']):
                         break
                 s.writelines(lines)
-
-            logger.info(f'Running SAGE instance: {temp_filename}')
 
             # Launch SAGE with MPI for each particle
             cmdline = [
@@ -242,15 +236,18 @@ def run_sage_hpc(particles, *args):
             processes.append((i, process, temp_filename, particle_dir))
             
         # Wait for all MPI processes to complete
-        for i, process, temp_filename, particle_dir in processes:
-            logger.info('Waiting for all SAGE instances to complete...')
+        total_particles = len(processes)
+        _print_progress(0, total_particles, count)
+        for done, (i, process, temp_filename, particle_dir) in enumerate(processes, start=1):
             out, err = process.communicate()
-            
+            _print_progress(done, total_particles, count)
             if process.returncode != 0:
                 logger.error(f"SAGE instance {i} failed with return code {process.returncode}")
                 logger.error(f"stdout: {out.decode()}")
                 logger.error(f"stderr: {err.decode()}")
                 raise RuntimeError(f"SAGE instance {i} failed")
+        sys.stdout.write('\n')
+        sys.stdout.flush()
 
     # Process results and clean up
     for item in processes:
@@ -297,7 +294,7 @@ def run_sage_hpc(particles, *args):
     if not opts.keep:
         shutil.rmtree(modeldir)
 
-    logger.info('Particles %r evaluated to %r', particles, fx)
+    logger.debug('Particles %r evaluated to %r', particles, fx)
     count += 1
     return fx
 
@@ -328,23 +325,22 @@ def run_sage(particle, *args):
     for l, line in enumerate(f):
         if line[:9] == 'OutputDir': f[l] = 'OutputDir              '+modeldir+'\n'
         for p in range(Np):
-            if line[:len(space['name'][p])] == space['name'][p]: 
-                f[l] = space['name'][p]+'          '+str(round(particle[p],5))+'\n'
+            if line[:len(space['name'][p])] == space['name'][p]:
+                phys = _to_physical(particle[p], space['is_log'][p])
+                f[l] = space['name'][p]+'          '+f'{phys:.6g}'+'\n'
                 Ndone += 1
         if Ndone==Np: break
     #
     s.writelines(f)
     s.close()
 
-    # currently assuming that serial in parallel here is the best
-    print('Running SAGE instance', temp_filename)
 #    cmdline = ['mpirun', '-np', '8', opts.sage_binary, temp_filename]
     cmdline = [opts.sage_binary, temp_filename]
     _exec_sage('Running SAGE instance', cmdline, cwd=os.path.dirname(opts.sage_binary))
 
     # Simple weighted sum of constraint scores (fixed from exponential transformation)
     total = sum(_evaluate(c, statTest, modeldir, subvols) * c.rel_weight for c in opts.constraints)
-    logger.info('Particle %r evaluated to %f', particle, total)
+    logger.debug('Particle %r evaluated to %f', particle, total)
 
     shutil.rmtree(modeldir)
     return total

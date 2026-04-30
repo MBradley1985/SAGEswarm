@@ -6,12 +6,15 @@ Common routines
 
 import argparse
 import collections
+import logging
 import os
 import subprocess
 import sys
 
 import h5py # type: ignore
 import numpy as np # type: ignore
+
+logger = logging.getLogger(__name__)
 
 PY2 = sys.version_info[0] == 2
 if PY2:
@@ -173,7 +176,7 @@ def parse_args(requires_observations=True):
 
 def load_observation(obsdir, fname, cols, skiprows=0):
     fname = os.path.join(obsdir, fname)
-    print("Loading observations from %s" % fname)
+    logger.debug("Loading observations from %s", fname)
     return np.loadtxt(fname, usecols=cols, unpack=True, skiprows=skiprows)
 
 def prepare_ax(ax, xmin, xmax, ymin, ymax, xtit, ytit, locators=(1, 1, 1, 1), fontsize=13):

@@ -1,6 +1,7 @@
-SfrEfficiency,eSFR,1,0.01,0.1
-FeedbackReheatingEpsilon,eReheat,0,0.0,6.0
-FeedbackEjectionEfficiency,eEject,0,0.1,1.0
+SfrEfficiency,aSF,1,0.005,0.2
+FeedbackReheatingEpsilon,eDisk,0,0.5,4.0
+FeedbackEjectionEfficiency,eHalo,0,0.1,1.0
+FFBMaxEfficiency,aFFB,0,0.05,1.0
 ReIncorporationFactor,eReinc,0,0.05,0.3
 RadioModeEfficiency,eRadio,1,0.001,1.0
 QuasarModeEfficiency,eQuasar,1,0.001,0.5

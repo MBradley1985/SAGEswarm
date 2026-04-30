@@ -170,6 +170,7 @@ def get_snapshot_map(sim_id):
         }
     elif sim_id == SIM_MINIMILLENNIUM:
         # miniMillennium: 64 snapshots (0-63), snapshot 63 is z=0
+        # snap 19 ≈ z=5.72, snap 18 ≈ z=6.20, snap 16 ≈ z=7.27
         return {
             'SMF_z0': [63],
             'SMF_z05': [48],
@@ -177,6 +178,11 @@ def get_snapshot_map(sim_id):
             'SMF_z20': [32],
             'SMF_z30': [27],
             'SMF_z40': [23],
+            'SMF_z50': [19],
+            'SMF_z60': [18],
+            'SMF_z70': [16],
+            'SMF_z80': [15],
+            'SMF_z100': [12],
             'SMF_Red_z0': [63],
             'SMF_Blue_z0': [63],
             'BHMF_z0': [63],
@@ -229,8 +235,10 @@ def get_target_snapshots(sim_id):
         # miniUchuu snapshots for z ~ [0, 0.5, 1.0, 2.0, 3.0, 4.0]
         return [49, 38, 32, 23, 17, 12]
     elif sim_id == SIM_MINIMILLENNIUM:
-        # Millennium snapshots for z = [0, 0.5, 1.0, 2.0, 3.0, 4.0]
-        return [63, 48, 40, 32, 27, 23]
+        # Millennium snapshots for 11 redshifts — column pairs 0–10 in sage_smf_all_redshifts.csv:
+        # z≈[0, 0.18, 0.51, 0.76, 1.08, 1.50, 2.07, 2.42, 3.06, 3.58, 4.18]
+        # Pairs 2,6,8,10 map to SMF_z05, SMF_z20, SMF_z30, SMF_z40 column expectations.
+        return [63, 56, 48, 44, 40, 36, 32, 30, 27, 25, 23]
     else:  # MTNG
         return [99, 78, 67, 50, 40, 33]
 

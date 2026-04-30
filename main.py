@@ -67,21 +67,12 @@ def get_required_snapshots(constraints_str, sim=0):
     snapshot_map = get_snapshot_map(sim)
 
     snapshots = set()
-    print(f"Parsing constraints string: {constraints_str}")
-    print(f"Using simulation ID: {sim} ({['miniUchuu', 'miniMillennium', 'MTNG'][sim]})")
     for constraint in constraints_str.split(','):
-        # Remove any weight/domain specifications
         base_constraint = constraint.split('(')[0].split('*')[0]
-        print(f"Processing constraint: {constraint}")
-        print(f"Base constraint: {base_constraint}")
         if base_constraint in snapshot_map:
-            print(f"Found snapshot mapping: {snapshot_map[base_constraint]}")
             snapshots.update(snapshot_map[base_constraint])
-        else:
-            print(f"Warning: No snapshot mapping found for {base_constraint}")
 
     result = sorted(list(snapshots))
-    print(f"Final snapshots list: {result}")
     return result
 
 def cleanup_files(opts):
@@ -175,6 +166,8 @@ def main():
                           type=int, default=None)
     pso_opts.add_argument('-m', '--max-iterations', help='Maximum number of iterations to reach before giving up, defaults to 20',
                           default=10, type=int)
+    pso_opts.add_argument('--max-stagnation', help='Stop if no improvement for this many consecutive iterations, defaults to 15',
+                          default=15, type=int)
     pso_opts.add_argument('-S', '--space-file', help='File with the search space specification, defaults to space.txt',
                           default='space.txt', type=_abspath)
     pso_opts.add_argument('-t', '--stat-test', help='Stat function used to calculate the value of a particle, defaults to student-t',
@@ -187,12 +180,12 @@ def main():
                       type=_abspath, default=None)
     pso_opts.add_argument('-r', '--random-seed', help='Random seed for reproducibility. If not specified, PSO will use random initialization.',
                       type=int, default=None)
-    pso_opts.add_argument('--omega', help='PSO inertia weight (default: 0.729). Standard constriction coefficient from Clerc & Kennedy (2002).',
-                      type=float, default=0.729)
-    pso_opts.add_argument('--phip', help='PSO cognitive parameter (default: 1.49445). Particle learning from own best. Standard value ~1.5-2.0.',
-                      type=float, default=1.49445)
-    pso_opts.add_argument('--phig', help='PSO social parameter (default: 1.49445). Particle learning from swarm best. Standard value ~1.5-2.0.',
-                      type=float, default=1.49445)
+    pso_opts.add_argument('--omega', help='PSO inertia weight (default: 0.5). Lower values damp velocity faster, promoting convergence.',
+                      type=float, default=0.5)
+    pso_opts.add_argument('--phip', help='PSO cognitive parameter (default: 0.5). Particle learning from own best.',
+                      type=float, default=0.5)
+    pso_opts.add_argument('--phig', help='PSO social parameter (default: 0.5). Particle learning from swarm best.',
+                      type=float, default=0.5)
 
     hpc_opts = parser.add_argument_group('HPC options')
     hpc_opts.add_argument('-H', '--hpc-mode', help='Enable HPC mode', action='store_true')
@@ -678,6 +671,7 @@ def main():
     logger.info('    Search space parameters: %s', ' '.join(space['name']))
     logger.info('    Swarm size: %d', ss)
     logger.info('    Maximum iterations: %d', opts.max_iterations)
+    logger.info('    Max stagnation: %d', opts.max_stagnation)
     logger.info('    PSO Hyperparameters:')
     logger.info('        omega (inertia): %.3f', opts.omega)
     logger.info('        phip (cognitive): %.3f', opts.phip)
@@ -715,13 +709,17 @@ def main():
     # Go, go, go!
     logger.info('Starting PSO now')
     tStart = time.time()
-    # No changing directories outside repo; all output is local
-    xopt, fopt = pso.pso(f, space['lb'], space['ub'], args=args, swarmsize=ss,
+    is_log = space['is_log'].astype(bool)
+    lb_pso = np.where(is_log, np.log10(space['lb']), space['lb'])
+    ub_pso = np.where(is_log, np.log10(space['ub']), space['ub'])
+    xopt, fopt = pso.pso(f, lb_pso, ub_pso, args=args, swarmsize=ss,
                          maxiter=opts.max_iterations, processes=procs,
                          omega=opts.omega, phip=opts.phip, phig=opts.phig,
                          dumpfile_prefix=os.path.join(tracksdir, 'track_%03d'),
                          csv_output_path=opts.csv_output,
-                         random_seed=opts.random_seed)
+                         random_seed=opts.random_seed,
+                         is_log=is_log,
+                         max_stagnation=opts.max_stagnation)
     tEnd = time.time()
 
     global count

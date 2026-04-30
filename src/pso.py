@@ -9,6 +9,7 @@ import numpy as np # type: ignore
 import csv
 import os
 import logging
+import sys
 import time
 import threading
 
@@ -83,6 +84,26 @@ def _write_results_to_csv(csv_path, iteration_history, final_positions, particle
 def _obj_wrapper(func, args, kwargs, x):
     return func(x, *args, **kwargs)
 
+def _indexed_obj_wrapper(func, args, kwargs, ix):
+    i, x = ix
+    return i, func(x, *args, **kwargs)
+
+def _to_display(x, is_log):
+    """Back-transform log-space particle positions to physical space for output."""
+    if is_log is None or not np.any(is_log):
+        return x
+    out = np.array(x, dtype=float)
+    out[..., is_log] = 10.0 ** x[..., is_log]
+    return out
+
+def _print_progress(done, total, iteration):
+    bar_width = 30
+    filled = int(bar_width * done / total) if total > 0 else 0
+    bar = '\u2588' * filled + '\u2591' * (bar_width - filled)
+    label = 'Init' if iteration == 0 else f'Iter {iteration}'
+    sys.stdout.write(f'\r  {label}  [{bar}]  {done}/{total} particles complete  ')
+    sys.stdout.flush()
+
 def _is_feasible_wrapper(func, x):
     return np.all(func(x)>=0)
 
@@ -95,11 +116,11 @@ def _cons_ieqcons_wrapper(ieqcons, args, kwargs, x):
 def _cons_f_ieqcons_wrapper(f_ieqcons, args, kwargs, x):
     return np.array(f_ieqcons(x, *args, **kwargs))
     
-def pso(func, lb, ub, ieqcons=[], f_ieqcons=None, args=(), kwargs={}, 
-        swarmsize=100, omega=0.729, phip=1.49445, phig=1.49445, maxiter=100, 
+def pso(func, lb, ub, ieqcons=[], f_ieqcons=None, args=(), kwargs={},
+        swarmsize=100, omega=0.5, phip=0.5, phig=0.5, maxiter=100,
         minstep=1e-8, minfunc=1e-8, debug=True, processes=1,
         particle_output=False, dumpfile_prefix=None, csv_output_path=None,
-        random_seed=None):
+        random_seed=None, is_log=None, max_stagnation=15):
     """
     Perform a particle swarm optimization (PSO)
    
@@ -240,16 +261,26 @@ def pso(func, lb, ub, ieqcons=[], f_ieqcons=None, args=(), kwargs={},
 
     # Calculate objective and constraints for each particle
     if processes > 1:
-        fx = np.array(mp_pool.map(obj, x))
+        indexed_obj = partial(_indexed_obj_wrapper, func, args, kwargs)
+        _print_progress(0, S, 0)
+        buf = {}
+        for i, val in mp_pool.imap_unordered(indexed_obj, enumerate(x)):
+            buf[i] = val
+            _print_progress(len(buf), S, 0)
+        sys.stdout.write('\n'); sys.stdout.flush()
+        fx = np.array([buf[i] for i in range(S)])
         fs = np.array(mp_pool.map(is_feasible, x))
     elif processes != 0:
+        _print_progress(0, S, 0)
         for i in range(S):
             fx[i] = obj(x[i, :])
             fs[i] = is_feasible(x[i, :])
+            _print_progress(i + 1, S, 0)
+        sys.stdout.write('\n'); sys.stdout.flush()
     else:
         fx = obj(x)
         fs = is_feasible(x)
-    dump(0, x, fx)
+    dump(0, _to_display(x, is_log), fx)
 
     # Store particle's best position (if constraints are satisfied)
     i_update = np.logical_and((fx < fp), fs)
@@ -271,6 +302,7 @@ def pso(func, lb, ub, ieqcons=[], f_ieqcons=None, args=(), kwargs={},
 
     # Initialize iteration history
     iteration_history = []
+    stagnation = 0
 
     # Iterate until termination criterion met
     it = 1
@@ -289,19 +321,30 @@ def pso(func, lb, ub, ieqcons=[], f_ieqcons=None, args=(), kwargs={},
 
         # Update objectives and constraints
         if processes > 1:
-            fx = np.array(mp_pool.map(obj, x))
+            indexed_obj = partial(_indexed_obj_wrapper, func, args, kwargs)
+            _print_progress(0, S, it)
+            buf = {}
+            for i, val in mp_pool.imap_unordered(indexed_obj, enumerate(x)):
+                buf[i] = val
+                _print_progress(len(buf), S, it)
+            sys.stdout.write('\n'); sys.stdout.flush()
+            fx = np.array([buf[i] for i in range(S)])
             fs = np.array(mp_pool.map(is_feasible, x))
         elif processes != 0:
+            _print_progress(0, S, it)
             for i in range(S):
                 fx[i] = obj(x[i, :])
                 fs[i] = is_feasible(x[i, :])
+                _print_progress(i + 1, S, it)
+            sys.stdout.write('\n'); sys.stdout.flush()
         else:
             fx = obj(x)
             fs = is_feasible(x)
 
-        # Store current iteration data
-        iteration_history.append((it, x.copy(), fx.copy()))
-        dump(it, x, fx)
+        # Store current iteration data (physical space for output)
+        x_phys = _to_display(x, is_log)
+        iteration_history.append((it, x_phys.copy(), fx.copy()))
+        dump(it, x_phys, fx)
 
         # Store particle's best position (if constraints are satisfied)
         i_update = np.logical_and((fx < fp), fs)
@@ -312,7 +355,7 @@ def pso(func, lb, ub, ieqcons=[], f_ieqcons=None, args=(), kwargs={},
         i_min = np.argmin(fp)
         if fp[i_min] < fg:
             if debug:
-                print('New best for swarm at iteration {:}: {:} {:}'.format(it, p[i_min, :], fp[i_min]))
+                print('New best for swarm at iteration {:}: {:} {:}'.format(it, _to_display(p[i_min, :], is_log), fp[i_min]))
 
             p_min = p[i_min, :].copy()
             stepsize = np.sqrt(np.sum((g - p_min)**2))
@@ -322,41 +365,50 @@ def pso(func, lb, ub, ieqcons=[], f_ieqcons=None, args=(), kwargs={},
                 
                 # Write CSV before returning
                 if csv_output_path:
-                    _write_results_to_csv(csv_output_path, iteration_history, p, fp, p_min, fp[i_min])
-                
+                    _write_results_to_csv(csv_output_path, iteration_history, _to_display(p, is_log), fp, _to_display(p_min, is_log), fp[i_min])
+                p_min_phys = _to_display(p_min, is_log)
                 if particle_output:
-                    return p_min, fp[i_min], p, fp
+                    return p_min_phys, fp[i_min], _to_display(p, is_log), fp
                 else:
-                    return p_min, fp[i_min]
-                    
+                    return p_min_phys, fp[i_min]
+
             elif stepsize <= minstep:
                 print('Stopping search: Swarm best position change less than {:}'.format(minstep))
-                
-                # Write CSV before returning
+
                 if csv_output_path:
-                    _write_results_to_csv(csv_output_path, iteration_history, p, fp, p_min, fp[i_min])
-                
+                    _write_results_to_csv(csv_output_path, iteration_history, _to_display(p, is_log), fp, _to_display(p_min, is_log), fp[i_min])
+                p_min_phys = _to_display(p_min, is_log)
                 if particle_output:
-                    return p_min, fp[i_min], p, fp
+                    return p_min_phys, fp[i_min], _to_display(p, is_log), fp
                 else:
-                    return p_min, fp[i_min]
+                    return p_min_phys, fp[i_min]
             else:
                 g = p_min.copy()
                 fg = fp[i_min]
+                stagnation = 0
+        else:
+            stagnation += 1
+            if stagnation >= max_stagnation:
+                print(f'Stopping search: no improvement for {max_stagnation} iterations')
+                if csv_output_path:
+                    _write_results_to_csv(csv_output_path, iteration_history, _to_display(p, is_log), fp, _to_display(g, is_log), fg)
+                if particle_output:
+                    return _to_display(g, is_log), fg, _to_display(p, is_log), fp
+                else:
+                    return _to_display(g, is_log), fg
 
         if debug:
-            print('Best after iteration {:}: {:} {:}'.format(it, g, fg))
+            print('Best after iteration {:}: {:} {:}'.format(it, _to_display(g, is_log), fg))
         it += 1
 
     print('Stopping search: maximum iterations reached --> {:}'.format(maxiter))
-    
-    # Write final results to CSV if path is provided
+
     if csv_output_path:
-        _write_results_to_csv(csv_output_path, iteration_history, p, fp, g, fg)
+        _write_results_to_csv(csv_output_path, iteration_history, _to_display(p, is_log), fp, _to_display(g, is_log), fg)
 
     if not is_feasible(g):
         print("However, the optimization couldn't find a feasible design. Sorry")
     if particle_output:
-        return g, fg, p, fp
+        return _to_display(g, is_log), fg, _to_display(p, is_log), fp
     else:
-        return g, fg
+        return _to_display(g, is_log), fg
