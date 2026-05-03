@@ -21,8 +21,9 @@ import sys
 import os
 import time
 
-# Import the PSO module
-import pso as pso_module
+# Import the production PSO module from src/
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+from src import pso as pso_module
 
 # Setup logging
 logging.basicConfig(
@@ -119,14 +120,77 @@ def beale_function(x):
 def shifted_sphere_function(x):
     """
     Shifted sphere function (offset minimum)
-    
+
     Global minimum: f(2, 2, ..., 2) = 0
     Search domain: typically [-5.12, 5.12]^n
-    
+
     Tests if PSO can find minimum not at origin.
     """
     offset = np.full_like(x, 2.0)
     return np.sum((x - offset)**2)
+
+
+def step_function(x):
+    """
+    De Jong's Step function (f3, from Kennedy & Eberhart 1995 original PSO paper)
+
+    Global minimum: f(-5.12, ..., -5.12) = 0  (using floor convention)
+    Search domain: [-5.12, 5.12]^n
+
+    Tests behaviour on discontinuous, flat-floored landscapes.
+    The floor means large regions give identical fitness — PSO must
+    not get stuck on the flat plateau.
+    """
+    return np.sum(np.floor(x + 0.5) ** 2)
+
+
+def griewank_function(x):
+    """
+    Griewank function (Yao, Liu & Lin 1999 benchmark suite)
+
+    Global minimum: f(0, 0, ..., 0) = 0
+    Search domain: [-600, 600]^n
+
+    The product term creates regular local minima that interact with the
+    sum term, making it look unimodal at large scale but multimodal up close.
+    Specifically designed to test PSO global search over a wide domain.
+    """
+    n = len(x)
+    sum_sq = np.sum(x**2) / 4000.0
+    prod_cos = np.prod(np.cos(x / np.sqrt(np.arange(1, n + 1))))
+    return sum_sq - prod_cos + 1.0
+
+
+def schwefel_function(x):
+    """
+    Schwefel function (Yao, Liu & Lin 1999 benchmark suite)
+
+    Global minimum: f(420.9687, ..., 420.9687) ≈ 0
+    Search domain: [-500, 500]^n
+
+    The global minimum is geometrically distant from the next-best local
+    minima — a deliberate deception trap. The PSO must not be seduced by
+    the cluster of near-optimal but incorrect solutions near the origin.
+    """
+    n = len(x)
+    return 418.9829 * n - np.sum(x * np.sin(np.sqrt(np.abs(x))))
+
+
+def himmelblau_function(x):
+    """
+    Himmelblau's function (2D only)
+
+    Has FOUR global minima all with f = 0:
+      (3.0,       2.0)
+      (-2.805118, 3.131312)
+      (-3.779310, -3.283186)
+      (3.584428,  -1.848126)
+
+    Tests that PSO finds at least one of them — validates it doesn't
+    get confused by symmetric multi-optima.
+    """
+    assert len(x) == 2, "Himmelblau is only defined for 2D"
+    return (x[0]**2 + x[1] - 11)**2 + (x[0] + x[1]**2 - 7)**2
 
 
 # ==============================================================================
@@ -196,6 +260,42 @@ BENCHMARK_TESTS = {
         'expected_pos': [0.0, 0.0],
         'tolerance': 0.5,  # Harder function
         'description': 'Nearly flat with central hole (challenging test)'
+    },
+    'step': {
+        'function': step_function,
+        'dimensions': 2,
+        'bounds': ([-5.12, -5.12], [5.12, 5.12]),
+        'expected_min': 0.0,
+        'expected_pos': [-0.5, -0.5],  # Any x in (-0.5, 0.5) gives floor(x+0.5)^2 = 0
+        'tolerance': 1.0,  # Discontinuous — position check less strict
+        'description': 'De Jong f3: discontinuous step landscape (Kennedy & Eberhart 1995)'
+    },
+    'griewank': {
+        'function': griewank_function,
+        'dimensions': 2,
+        'bounds': ([-600.0, -600.0], [600.0, 600.0]),
+        'expected_min': 0.0,
+        'expected_pos': [0.0, 0.0],
+        'tolerance': 0.1,
+        'description': 'Regular local minima over wide domain (Yao et al. 1999)'
+    },
+    'schwefel': {
+        'function': schwefel_function,
+        'dimensions': 2,
+        'bounds': ([-500.0, -500.0], [500.0, 500.0]),
+        'expected_min': 0.0,
+        'expected_pos': [420.9687, 420.9687],
+        'tolerance': 10.0,  # Deceptive — global min far from cluster of near-optima
+        'description': 'Deceptive function: global min far from best local minima (Yao et al. 1999)'
+    },
+    'himmelblau': {
+        'function': himmelblau_function,
+        'dimensions': 2,
+        'bounds': ([-5.0, -5.0], [5.0, 5.0]),
+        'expected_min': 0.0,
+        'expected_pos': [3.0, 2.0],  # One of four global minima
+        'tolerance': 0.1,
+        'description': 'Four global minima at f=0 (tests symmetric multi-optima)'
     }
 }
 

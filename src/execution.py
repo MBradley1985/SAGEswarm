@@ -269,7 +269,10 @@ def run_sage_hpc(particles, *args):
         
         for retry in range(max_retries):
             try:
-                total_score = sum(_evaluate(c, statTest, particle_dir, subvols) * c.rel_weight for c in opts.constraints)
+                scores = {c: _evaluate(c, statTest, particle_dir, subvols) for c in opts.constraints}
+                total_score = sum(scores[c] * c.rel_weight for c in opts.constraints)
+                score_parts = '  '.join(f'{c.__class__.__name__}={scores[c]:.3f}' for c in opts.constraints)
+                logger.debug(f'Particle {i} scores: {score_parts}  total={total_score:.4f}')
                 fx[i] = total_score
                 success = True
                 break

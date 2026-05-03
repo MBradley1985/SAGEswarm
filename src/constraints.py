@@ -248,7 +248,7 @@ class Constraint(object):
                 # Z = log10((MetalsColdGas / ColdGas) / 0.02) + 9.0
                 w_mzr = np.where((G['ColdGas'] > 0) & (G['MetalsColdGas'] > 0) & (G['StellarMass'] > 0))[0]
                 if len(w_mzr) > 0:
-                    metallicity = np.log10((G['MetalsColdGas'][w_mzr] / G['ColdGas'][w_mzr]) / 0.02) + 9.0
+                    metallicity = np.log10((G['MetalsColdGas'][w_mzr] / G['ColdGas'][w_mzr]) / 0.02) + 8.69
                     stellar_mass_mzr = np.log10(G['StellarMass'][w_mzr] * 1e10 / self.h0)
                 else:
                     metallicity = np.array([])
@@ -263,27 +263,31 @@ class Constraint(object):
                     halo_mass_shmr = np.array([])
                     stellar_mass_shmr = np.array([])
 
-        # Get the edges of the age bins (after the loop)
-        alist_full = np.loadtxt(self.age_alist_file)
-        
-        # Calculate lookback times for the actual snapshots we loaded
-        for snap_idx, snap in enumerate(self.snapshot):
-            if snap < len(alist_full):
-                redshift = 1.0 / alist_full[snap] - 1.0
-                SnapshotTimes[snap_idx] = r.z2tL(redshift, self.h0, self.Omega0, 1.0-self.Omega0)
-        
-        # Also calculate generic age bins for other constraints
-        if Nage>=len(alist_full)-1:
-            alist = alist_full[::-1]
-            RedshiftBinEdge = 1./ alist - 1.
+        # Get the edges of the age bins (after the loop).
+        # alist is only required for SFRD/SMD history constraints; skip gracefully when absent.
+        if self.age_alist_file is not None:
+            alist_full = np.loadtxt(self.age_alist_file)
+
+            for snap_idx, snap in enumerate(self.snapshot):
+                if snap < len(alist_full):
+                    redshift = 1.0 / alist_full[snap] - 1.0
+                    SnapshotTimes[snap_idx] = r.z2tL(redshift, self.h0, self.Omega0, 1.0-self.Omega0)
+
+            if Nage >= len(alist_full) - 1:
+                alist = alist_full[::-1]
+                RedshiftBinEdge = 1./ alist - 1.
+            else:
+                indices_float = np.arange(Nage+1) * (len(alist_full)-1.0) / Nage
+                indices = indices_float.astype(np.int32)
+                alist = alist_full[indices][::-1]
+                RedshiftBinEdge = 1./ alist - 1.
+            TimeBinEdge = np.array([r.z2tL(redshift, self.h0, self.Omega0, 1.0-self.Omega0) for redshift in RedshiftBinEdge])
+            dT = np.diff(TimeBinEdge)
+            TimeBinCentre = TimeBinEdge[:-1] + 0.5*dT
         else:
-            indices_float = np.arange(Nage+1) * (len(alist_full)-1.0) / Nage
-            indices = indices_float.astype(np.int32)
-            alist = alist_full[indices][::-1]
-            RedshiftBinEdge = 1./ alist - 1.
-        TimeBinEdge = np.array([r.z2tL(redshift, self.h0, self.Omega0, 1.0-self.Omega0) for redshift in RedshiftBinEdge]) # look-back time [Gyr]
-        dT = np.diff(TimeBinEdge) # time step for each bin
-        TimeBinCentre = TimeBinEdge[:-1] + 0.5*dT
+            TimeBinEdge = np.zeros(Nage + 1)
+            dT = np.ones(Nage)
+            TimeBinCentre = np.zeros(Nage)
 
         #########################
         # Calculate Poisson errors before taking logs.
@@ -460,11 +464,11 @@ class Constraint(object):
         ax.axvline(self.domain[0], ls='dotted', c='red', alpha=0.5, label='Domain')
         ax.axvline(self.domain[1], ls='dotted', c='red', alpha=0.5)
         
-        # Plot data
+        # Plot data (raw model last so it renders on top of interp line)
         ax.plot(x_obs_sel, y_obs_sel, marker='v', ls='None', c='blue', markersize=6, label="Selected obs")
-        ax.plot(x_mod, y_mod, marker='^', ls='solid', c='orange', markersize=4, alpha=0.7, label="Raw model")
         ax.plot(x_obs, y_mod_interp, ls='solid', c='green', linewidth=2, label="Interp model")
         ax.plot(x_obs_sel, y_mod_sel, ls='None', marker='o', c='brown', markersize=5, label="Selected model")
+        ax.plot(x_mod, y_mod, marker='^', ls='None', c='orange', markersize=7, zorder=5, label="Raw model")
         
         # Error bars - ensure errors are positive
         for i, x_val in enumerate(x_obs):
@@ -476,7 +480,7 @@ class Constraint(object):
         chi2 = analysis.chi2(y_obs_sel, y_mod_sel, err)
         st = analysis.studentT(y_obs_sel, y_mod_sel, err)
         
-        ax.set_title('%s\n$\chi^2$ = %.2f, student-t = %.2f' % (str(self), chi2, st), fontsize=10)
+        ax.set_title(r'%s' % str(self) + '\n$\\chi^2$ = %.2f, student-t = %.2f' % (chi2, st), fontsize=10)
         ax.legend(loc='best', fontsize=8, frameon=False)
         ax.grid(alpha=0.3)
         
@@ -562,7 +566,7 @@ class Constraint(object):
 class BHMF(Constraint):
     """Common logic for BHMF constraints"""
 
-    domain = (4, 10.5)
+    domain = (7.0, 10.5)  # below 10^7 Msun is TRINITY extrapolation, dominated by SAGE seed BHs
 
     def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr):
         y = hist_bhmf[0]
@@ -578,31 +582,27 @@ class BHMF_z0(BHMF):
 
     def get_obs_x_y_err(self):
         DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
-        # Load data from TRINITY PaperIV (z=0.1)
+        # TRINITY Paper IV (arXiv:2309.07210), z=0.1, Planck 2015 cosmology (h=0.6774)
         obs_data = np.loadtxt(os.path.join(DATA_DIR, 'fig4_bhmf_z0.1.txt'))
-        logm = obs_data[:, 0]           # log10(Mbh [Msun])
-        phi = obs_data[:, 1]            # BHMF_best [Mpc^-3 dex^-1]
-        phi_16th = obs_data[:, 2]       # BHMF_16th [Mpc^-3 dex^-1]
-        phi_84th = obs_data[:, 3]       # BHMF_84th [Mpc^-3 dex^-1]
-        
-        # Convert to log10 space
-        logphi = np.log10(phi)
-        logphi_16th = np.log10(phi_16th)
-        logphi_84th = np.log10(phi_84th)
-        
-        # Calculate asymmetric errors in log space
-        y_dn = logphi - logphi_16th  # Lower error (positive value)
-        y_up = logphi_84th - logphi  # Upper error (positive value)
-        
-        # Remove NaN values
-        valid_mask = ~np.isnan(logm) & ~np.isnan(logphi) & ~np.isnan(y_dn) & ~np.isnan(y_up)
-        x_obs = logm[valid_mask]
-        y_obs = logphi[valid_mask]
-        y_dn = y_dn[valid_mask]
-        y_up = y_up[valid_mask]
-    
-        return x_obs, y_obs, y_dn, y_up
-    
+        logm = obs_data[:, 0]           # log10(Mbh [Msun]) — physical (file header)
+        phi = obs_data[:, 1]            # BHMF_best [Mpc^-3 dex^-1] — physical (file header)
+        phi_16th = obs_data[:, 2]
+        phi_84th = obs_data[:, 3]
+
+        # Data is in physical Msun / Mpc^-3 at h_obs=0.6774 (Planck 2015).
+        # Convert physical-at-h_obs to physical-at-h0: M ∝ H0^-2, phi ∝ H0^3
+        h_obs = 0.6774
+        x_obs = logm + 2.0 * np.log10(h_obs / self.h0)
+        logphi      = np.log10(phi)      + 3.0 * np.log10(self.h0 / h_obs)
+        logphi_16th = np.log10(phi_16th) + 3.0 * np.log10(self.h0 / h_obs)
+        logphi_84th = np.log10(phi_84th) + 3.0 * np.log10(self.h0 / h_obs)
+
+        y_dn = logphi - logphi_16th
+        y_up = logphi_84th - logphi
+
+        valid_mask = ~np.isnan(x_obs) & ~np.isnan(logphi) & ~np.isnan(y_dn) & ~np.isnan(y_up)
+        return x_obs[valid_mask], logphi[valid_mask], y_dn[valid_mask], y_up[valid_mask]
+
     def get_sage_x_y(self):
         # Load data from SAGE
         logm, phi = self.load_observation('../data/sage_bhmf_all_redshifts.csv', cols=[0,1])
@@ -613,7 +613,7 @@ class BHMF_z0(BHMF):
         y_sage = logphi[valid_mask]
 
         return x_sage, y_sage
-    
+
 class BHMF_z10(BHMF):
     """The BHMF constraint at z=1.0"""
 
@@ -621,30 +621,25 @@ class BHMF_z10(BHMF):
 
     def get_obs_x_y_err(self):
         DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
-        # Load data from TRINITY PaperIV (z=1.0)
+        # TRINITY Paper IV (arXiv:2309.07210), z=1.0, Planck 2015 cosmology (h=0.6774)
         obs_data = np.loadtxt(os.path.join(DATA_DIR, 'fig4_bhmf_z1.0.txt'))
-        logm = obs_data[:, 0]           # log10(Mbh [Msun])
-        phi = obs_data[:, 1]            # BHMF_best [Mpc^-3 dex^-1]
-        phi_16th = obs_data[:, 2]       # BHMF_16th [Mpc^-3 dex^-1]
-        phi_84th = obs_data[:, 3]       # BHMF_84th [Mpc^-3 dex^-1]
-        
-        # Convert to log10 space
-        logphi = np.log10(phi)
-        logphi_16th = np.log10(phi_16th)
-        logphi_84th = np.log10(phi_84th)
-        
-        # Calculate asymmetric errors in log space
-        y_dn = logphi - logphi_16th  # Lower error (positive value)
-        y_up = logphi_84th - logphi  # Upper error (positive value)
-        
-        # Remove NaN values
-        valid_mask = ~np.isnan(logm) & ~np.isnan(logphi) & ~np.isnan(y_dn) & ~np.isnan(y_up)
-        x_obs = logm[valid_mask]
-        y_obs = logphi[valid_mask]
-        y_dn = y_dn[valid_mask]
-        y_up = y_up[valid_mask]
-    
-        return x_obs, y_obs, y_dn, y_up
+        logm = obs_data[:, 0]           # log10(Mbh [Msun]) — physical (file header)
+        phi = obs_data[:, 1]            # BHMF_best [Mpc^-3 dex^-1] — physical (file header)
+        phi_16th = obs_data[:, 2]
+        phi_84th = obs_data[:, 3]
+
+        # Data is in physical Msun / Mpc^-3 at h_obs=0.6774 (Planck 2015).
+        h_obs = 0.6774
+        x_obs = logm + 2.0 * np.log10(h_obs / self.h0)
+        logphi      = np.log10(phi)      + 3.0 * np.log10(self.h0 / h_obs)
+        logphi_16th = np.log10(phi_16th) + 3.0 * np.log10(self.h0 / h_obs)
+        logphi_84th = np.log10(phi_84th) + 3.0 * np.log10(self.h0 / h_obs)
+
+        y_dn = logphi - logphi_16th
+        y_up = logphi_84th - logphi
+
+        valid_mask = ~np.isnan(x_obs) & ~np.isnan(logphi) & ~np.isnan(y_dn) & ~np.isnan(y_up)
+        return x_obs[valid_mask], logphi[valid_mask], y_dn[valid_mask], y_up[valid_mask]
     
     def get_sage_x_y(self):
         # Load data from SAGE
@@ -675,11 +670,11 @@ class SMF_z0(SMF):
     z = [0]
 
     def get_obs_x_y_err(self):
-        # SMF from Li & White (2009)
+        # Li & White (2009): masses in Msun/h^2 and phi in (Mpc/h)^-3 at h=0.7 (file footer).
+        # Correct conversion to physical units at h0: x - 2*log10(h0), y + 3*log10(h0).
         lm, p, dpdn, dpup = self.load_observation('../data/SMF_Li2009.dat', cols=[0,1,2,3])
-        hobs = self.h0
-        x_obs = lm - 2.0 * np.log10(hobs) + 2.0 * np.log10(hobs/self.h0)
-        y_obs = p + 3.0 * np.log10(hobs) - 3.0 * np.log10(hobs/self.h0)
+        x_obs = lm - 2.0 * np.log10(self.h0)   # Msun/h^2 → physical Msun at h0
+        y_obs = p + 3.0 * np.log10(self.h0)    # (Mpc/h)^-3 → physical Mpc^-3 at h0
         y_dn = dpdn
         y_up = dpup
 
@@ -702,13 +697,15 @@ class SMF_z05(SMF):
     z = [0.5]
 
     def get_obs_x_y_err(self):
-        # SMF from Weaver et al. (2022)
+        # Weaver+2022 COSMOS2020: physical Msun and physical Mpc^-3 at h=0.7.
+        # Convert physical-at-h_obs to physical-at-h0: M ∝ H0^-2, phi ∝ H0^3
         lm, pD, dn, du = self.load_observation('../data/COSMOS2020/SMF_Farmer_v2.1_0.2z0.5_total.txt', cols=[0,2,3,4])
-        hobs = self.h0
-        y_obs = np.log10(pD) + 3.0 * np.log10(hobs/self.h0)
+        h_obs = 0.7
+        x_obs = lm + 2.0 * np.log10(h_obs / self.h0)
+        y_obs = np.log10(pD) + 3.0 * np.log10(self.h0 / h_obs)
+        dn = np.maximum(dn, pD * 1e-6)  # guard against dn<=0 at bright end
         y_dn = np.log10(pD) - np.log10(dn)
         y_up = np.log10(du) - np.log10(pD)
-        x_obs = lm - 2.0 * np.log10(hobs/self.h0)
 
         return x_obs, y_obs, y_dn, y_up
     
@@ -729,13 +726,14 @@ class SMF_z10(SMF):
     z = [1.0]
 
     def get_obs_x_y_err(self):
-        # SMF from Weaver et al. (2022)
+        # Weaver+2022 COSMOS2020: physical Msun and physical Mpc^-3 at h=0.7.
         lm, pD, dn, du = self.load_observation('../data/COSMOS2020/SMF_Farmer_v2.1_0.8z1.1_total.txt', cols=[0,2,3,4])
-        hobs = self.h0
-        y_obs = np.log10(pD) + 3.0 * np.log10(hobs/self.h0)
+        h_obs = 0.7
+        x_obs = lm + 2.0 * np.log10(h_obs / self.h0)
+        y_obs = np.log10(pD) + 3.0 * np.log10(self.h0 / h_obs)
+        dn = np.maximum(dn, pD * 1e-6)  # guard against dn<=0 at bright end
         y_dn = np.log10(pD) - np.log10(dn)
         y_up = np.log10(du) - np.log10(pD)
-        x_obs = lm - 2.0 * np.log10(hobs/self.h0)
 
         return x_obs, y_obs, y_dn, y_up
     
@@ -756,13 +754,14 @@ class SMF_z20(SMF):
     z = [2.0]
 
     def get_obs_x_y_err(self):
-        # SMF from Weaver et al. (2022)
+        # Weaver+2022 COSMOS2020: physical Msun and physical Mpc^-3 at h=0.7.
         lm, pD, dn, du = self.load_observation('../data/COSMOS2020/SMF_Farmer_v2.1_1.5z2.0_total.txt', cols=[0,2,3,4])
-        hobs = self.h0
-        y_obs = np.log10(pD) + 3.0 * np.log10(hobs/self.h0)
+        h_obs = 0.7
+        x_obs = lm + 2.0 * np.log10(h_obs / self.h0)
+        y_obs = np.log10(pD) + 3.0 * np.log10(self.h0 / h_obs)
+        dn = np.maximum(dn, pD * 1e-6)  # guard against dn<=0 at bright end
         y_dn = np.log10(pD) - np.log10(dn)
         y_up = np.log10(du) - np.log10(pD)
-        x_obs = lm - 2.0 * np.log10(hobs/self.h0)
 
         return x_obs, y_obs, y_dn, y_up
     
@@ -783,13 +782,14 @@ class SMF_z30(SMF):
     z = [3.0]
 
     def get_obs_x_y_err(self):
-        # SMF from Weaver et al. (2022)
+        # Weaver+2022 COSMOS2020: physical Msun and physical Mpc^-3 at h=0.7.
         lm, pD, dn, du = self.load_observation('../data/COSMOS2020/SMF_Farmer_v2.1_2.5z3.0_total.txt', cols=[0,2,3,4])
-        hobs = self.h0
-        y_obs = np.log10(pD) + 3.0 * np.log10(hobs/self.h0)
+        h_obs = 0.7
+        x_obs = lm + 2.0 * np.log10(h_obs / self.h0)
+        y_obs = np.log10(pD) + 3.0 * np.log10(self.h0 / h_obs)
+        dn = np.maximum(dn, pD * 1e-6)  # guard against dn<=0 at bright end
         y_dn = np.log10(pD) - np.log10(dn)
         y_up = np.log10(du) - np.log10(pD)
-        x_obs = lm - 2.0 * np.log10(hobs/self.h0)
 
         return x_obs, y_obs, y_dn, y_up
     
@@ -810,13 +810,14 @@ class SMF_z40(SMF):
     z = [4.0]
 
     def get_obs_x_y_err(self):
-        # SMF from Weaver et al. (2022)
+        # Weaver+2022 COSMOS2020: physical Msun and physical Mpc^-3 at h=0.7.
         lm, pD, dn, du = self.load_observation('../data/COSMOS2020/SMF_Farmer_v2.1_3.5z4.5_total.txt', cols=[0,2,3,4])
-        hobs = self.h0
-        y_obs = np.log10(pD) + 3.0 * np.log10(hobs/self.h0)
+        h_obs = 0.7
+        x_obs = lm + 2.0 * np.log10(h_obs / self.h0)
+        y_obs = np.log10(pD) + 3.0 * np.log10(self.h0 / h_obs)
+        dn = np.maximum(dn, pD * 1e-6)  # guard against dn<=0 at bright end
         y_dn = np.log10(pD) - np.log10(dn)
         y_up = np.log10(du) - np.log10(pD)
-        x_obs = lm - 2.0 * np.log10(hobs/self.h0)
 
         return x_obs, y_obs, y_dn, y_up
     
@@ -1066,7 +1067,7 @@ class CSFRDH(Constraint):
 class BHBM(Constraint):
     """The Black hole-Bulge mass relation constraint"""
 
-    domain = (8.0, 11.5)
+    domain = (9.0, 12.0)
     z = [0]
 
     def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr):
@@ -1074,49 +1075,57 @@ class BHBM(Constraint):
         mask = (BlackHoleMass > 0) & (BulgeMass > 0) & np.isfinite(BlackHoleMass) & np.isfinite(BulgeMass)
         y = BlackHoleMass[mask]
         x = BulgeMass[mask]
-        
-        if len(x) < 10:  # Not enough points for reliable median
-            return np.array([8.0, 12.0]), np.array([6.0, 8.0]), np.array([0.3, 0.3])
+
+        # Only keep galaxies that fall within the binning range
+        range_mask = (x >= 9.0) & (x <= 12.0)
+        x_in_range = x[range_mask]
+
+        if len(x_in_range) < 3:
+            return np.array([9.0, 12.0]), np.array([6.0, 9.0]), np.array([0.3, 0.3])
 
         # Create bins for bulge mass and calculate median black hole mass in each bin
-        bin_edges = np.arange(8.0, 12.1, 0.2)  # Bins every 0.2 dex
+        bin_edges = np.arange(9.0, 12.1, 0.2)  # Bins every 0.2 dex
         bin_centers = []
         median_bh_mass = []
         bin_errors = []
-        
+
         for i in range(len(bin_edges) - 1):
             bin_mask = (x >= bin_edges[i]) & (x < bin_edges[i+1])
-            if np.sum(bin_mask) >= 10:  # At least 10 galaxies in bin
+            if np.sum(bin_mask) >= 3:  # At least 3 galaxies in bin
                 bin_centers.append((bin_edges[i] + bin_edges[i+1]) / 2.0)
                 median_bh_mass.append(np.median(y[bin_mask]))
-                # Error on median is approximately 1.25 * std / sqrt(N) for Gaussian
-                # For scatter in BHBM relation, use standard deviation / sqrt(N)
                 N_bin = np.sum(bin_mask)
-                std_bin = np.std(y[bin_mask])
-                bin_errors.append(std_bin / np.sqrt(N_bin))
-        
-        if len(bin_centers) < 3:  # Not enough bins for reliable relation
-            return np.array([8.0, 12.0]), np.array([6.0, 8.0]), np.array([0.3, 0.3])
+                std_bin = np.std(y[bin_mask]) if N_bin > 1 else 0.3
+                bin_errors.append(max(std_bin / np.sqrt(N_bin), 0.05))
+
+        if len(bin_centers) < 1:
+            return np.array([9.0, 12.0]), np.array([6.0, 9.0]), np.array([0.3, 0.3])
 
         return np.array(bin_centers), np.array(median_bh_mass), np.array(bin_errors)
 
     def get_obs_x_y_err(self):
-        
-        # Häring & Rix 2004 relation
-        w_bulge = 10. ** np.arange(8.0, 12.5, 0.1)  # More reasonable range
-        BHdata_haring = 10. ** (8.2 + 1.12 * np.log10(w_bulge / 1.0e11))
-        
-        # Convert to log space
-        x_points = np.log10(w_bulge)
-        y_points = np.log10(BHdata_haring)
-        
-        # Typical scatter is ~0.3-0.4 dex
-        scatter_dex = 0.34  # Häring & Rix 2004 intrinsic scatter
-        
-        # Use scatter as symmetric error
-        err = np.ones_like(y_points) * scatter_dex
-        
-        return x_points, y_points, err, err
+        # Combined individual galaxy measurements binned to match model output.
+        # Comparing 154 individual galaxies to model medians inflates chi² with
+        # physical scatter; bin first so both sides are median-per-bin.
+        log_mbulge, log_mbh, _, _ = self.load_observation(
+            '../data/bhbm_obs_combined.csv', cols=[0, 1, 2, 3], skiprows=3)
+
+        bin_edges = np.arange(9.0, 12.1, 0.4)  # coarser than model bins — ~7 obs bins
+        bin_centers, median_bh, bin_err = [], [], []
+        for i in range(len(bin_edges) - 1):
+            mask = (log_mbulge >= bin_edges[i]) & (log_mbulge < bin_edges[i + 1])
+            if np.sum(mask) >= 3:
+                bin_centers.append((bin_edges[i] + bin_edges[i + 1]) / 2.0)
+                med = np.median(log_mbh[mask])
+                median_bh.append(med)
+                N = np.sum(mask)
+                scatter = np.std(log_mbh[mask]) if N > 1 else 0.3
+                bin_err.append(max(scatter / np.sqrt(N), 0.05))
+
+        x_obs = np.array(bin_centers)
+        y_obs = np.array(median_bh)
+        err = np.array(bin_err)
+        return x_obs, y_obs, err, err
     
     def get_sage_x_y(self):
         # Load data from SAGE
@@ -1133,15 +1142,15 @@ class HIMF(Constraint):
     z = [0]
 
     def get_obs_x_y_err(self):
-        # Load Zwaan05 data and correct data for their choice of cosmology
-        lmHI, pHI, dpHIdn, dpHIup = self.load_observation('../data/HIMF_Zwaan2005.dat', cols=[0,1,2,3])
+        # Jones et al. (2018) ALFALFA 100%, measured with h=0.7
+        # Cols: log(MHI/Msun), log(phi [Mpc^-3 dex^-1]), log(phi_low), log(phi_up)
+        lmHI, pHI, pHI_low, pHI_up = self.load_observation('../data/HIMF_Jones18.dat', cols=[0,1,2,3])
 
-        # Correct data for their choice of cosmology
-        hobs = self.h0 
-        x_obs = lmHI + np.log10(pow(hobs, 2) / pow(self.h0, 2))
-        y_obs = pHI + np.log10(pow(self.h0, 3) / pow(hobs, 3))
-        y_dn = dpHIdn
-        y_up = dpHIup
+        h_obs = 0.7
+        x_obs = lmHI + np.log10(pow(h_obs, 2) / pow(self.h0, 2))
+        y_obs = pHI + np.log10(pow(self.h0, 3) / pow(h_obs, 3))
+        y_dn = pHI - pHI_low   # asymmetric lower error in log space
+        y_up = pHI_up - pHI   # asymmetric upper error in log space
 
         return x_obs, y_obs, y_dn, y_up
 
@@ -1281,22 +1290,21 @@ class SMD(Constraint):
 class MZR(Constraint):
     """Mass-Metallicity Relation constraint"""
 
-    domain = (8.5, 11.0)  # Stellar mass range in log10(Msun)
+    domain = (8.0, 11.0)  # Stellar mass range in log10(Msun)
     z = [0]
 
     def get_obs_x_y_err(self):
-        # Load Tremonti et al. 2004 data
+        # Curti et al. (2020) MZR — 75 stacked data points, asymmetric errors
         DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
-        obs_data = np.loadtxt(os.path.join(DATA_DIR, 'Tremonti04.dat'), comments='#')
+        obs_data = np.loadtxt(os.path.join(DATA_DIR, 'Curti2020.dat'), comments='#')
 
-        logm = obs_data[:, 0]        # log(Mstars/Msun)
+        logm = obs_data[:, 0]         # log10(Mstar/Msun)
         metallicity = obs_data[:, 1]  # 12+log(O/H)
-        met_16th = obs_data[:, 2]     # 16th percentile
-        met_84th = obs_data[:, 3]     # 84th percentile
+        met_low = obs_data[:, 2]      # lower bound
+        met_high = obs_data[:, 3]     # upper bound
 
-        # Calculate asymmetric errors
-        y_dn = metallicity - met_16th
-        y_up = met_84th - metallicity
+        y_dn = metallicity - met_low
+        y_up = met_high - metallicity
 
         return logm, metallicity, y_dn, y_up
 
@@ -1338,23 +1346,23 @@ class SHMR(Constraint):
     z = [0]
 
     def get_obs_x_y_err(self):
-        # Load Moster et al. 2013 data (z=0 columns)
+        # Correa & Schaye (2019) SHMR — combined LTGs + ETGs, actual measurements
+        # Cols: log10(M200), log10(Mstar), lower_bound, upper_bound
         DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
-        obs_data = np.loadtxt(os.path.join(DATA_DIR, 'Moster_2013.csv'), delimiter='\t')
+        ltg = np.loadtxt(os.path.join(DATA_DIR, 'LTGs_Correa19.dat'), comments='#')
+        etg = np.loadtxt(os.path.join(DATA_DIR, 'ETGs_Correa19.dat'), comments='#')
+        obs_data = np.vstack([ltg, etg])
 
-        # First two columns are z=0: halo mass, stellar mass
         logm_halo = obs_data[:, 0]
         logm_stellar = obs_data[:, 1]
+        stellar_low = obs_data[:, 2]
+        stellar_high = obs_data[:, 3]
 
-        # Remove NaN values
         valid_mask = ~np.isnan(logm_halo) & ~np.isnan(logm_stellar)
         logm_halo = logm_halo[valid_mask]
         logm_stellar = logm_stellar[valid_mask]
-
-        # Assume ~0.15 dex scatter
-        scatter = 0.15
-        y_dn = np.ones_like(logm_stellar) * scatter
-        y_up = np.ones_like(logm_stellar) * scatter
+        y_dn = logm_stellar - stellar_low[valid_mask]
+        y_up = stellar_high[valid_mask] - logm_stellar
 
         return logm_halo, logm_stellar, y_dn, y_up
 

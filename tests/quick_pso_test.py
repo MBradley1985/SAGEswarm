@@ -11,7 +11,9 @@ Usage:
 
 import numpy as np
 import sys
-import pso as pso_module
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+from src import pso as pso_module
 
 
 def simple_quadratic(x):

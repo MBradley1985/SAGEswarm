@@ -203,8 +203,8 @@ def create_iteration_plot(filename, num_particles, num_iterations, obs_data, sag
         'BHBM': {
             'xlabel': r'$\log_{10} M_{\mathrm{bulge}}\ (M_{\odot})$',
             'ylabel': r'$\log_{10} M_{\mathrm{bh}}\ (M_{\odot})$',
-            'xlim': [8.0, 12.0],
-            'ylim': [6.0, 10.0],
+            'xlim': [9.0, 12.5],
+            'ylim': [5.0, 11.0],
             'yscale': 'linear',
             'legend_loc': 'upper left',
             'transform_y': lambda y: y
@@ -231,7 +231,7 @@ def create_iteration_plot(filename, num_particles, num_iterations, obs_data, sag
             'xlabel': r'$\log_{10} M_{\mathrm{stars}}\ (M_{\odot})$',
             'ylabel': r'$12 + \log(\mathrm{O/H})$',
             'xlim': [8.5, 11.0],
-            'ylim': [8.0, 9.5],
+            'ylim': [7.0, 9.5],
             'yscale': 'linear',
             'legend_loc': 'lower right',
             'transform_y': lambda y: y
@@ -646,41 +646,24 @@ def load_sage_data_forBHMF():
 def load_bhbm_data():
     """Load BHBM data from SAGE-miniUchuu and observations"""
     DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
-    # Load observational data from Haring & Rix 2004
-    blackholemass, bulgemass = load_observation(os.path.join(DATA_DIR, 'Haring_Rix_2004_line.csv'), cols=[2,3])
-    bulgemass_z2, blackholemass_z2 = load_observation(os.path.join(DATA_DIR, 'Zhang_BHBM_z2.csv'), cols=[0,1])
-    log_blackholemass = blackholemass
-    log_bulgemass = bulgemass
+    # Load combined individual galaxy observations
+    # H&R 2004 + Davis 2019 (spirals) + Sahu 2019 (ellipticals)
+    log_bulgemass, log_blackholemass = load_observation(
+        os.path.join(DATA_DIR, 'bhbm_obs_combined.csv'), cols=[0, 1], skiprows=3)
 
     # Load SAGE data
     sage_bhbm_data = load_observation(os.path.join(DATA_DIR, 'sage_bhbm_all_redshifts.csv'), cols=[0,1,2,3,4,5,6,7,8,9,10,11])
-    
-    # Dictionary to store data for each redshift
+
     data_by_z = {}
-    
-    # List of redshifts and their corresponding column indices
-    redshifts = [0.0]
-    col_indices = [(0,1)]
-    
-    # Process data for each redshift
-    for z, (mass_idx, bh_idx) in zip(redshifts, col_indices):
+    for z, (mass_idx, bh_idx) in zip([0.0], [(0, 1)]):
         logm_sage = sage_bhbm_data[mass_idx]
         logbh_sage = sage_bhbm_data[bh_idx]
         valid_mask = ~np.isnan(logm_sage) & ~np.isnan(logbh_sage)
-        
-        if z == 0.0:
-            # For z=0, include both observational and SAGE data
-            data_by_z[z] = (
-                (log_bulgemass, log_blackholemass, 'Haring & Rix 2004'),
-                (logm_sage[valid_mask], logbh_sage[valid_mask], f'SAGE (z={z})')
-            )
-        else:
-            # For other redshifts, only SAGE data
-            data_by_z[z] = (
-                (bulgemass_z2, blackholemass_z2, 'Zhang et al. 2023'),
-                (logm_sage[valid_mask], logbh_sage[valid_mask], f'SAGE (z={z})')
-            )
-    
+        data_by_z[z] = (
+            (log_bulgemass, log_blackholemass, 'H&R04 + Davis19 + Sahu19'),
+            (logm_sage[valid_mask], logbh_sage[valid_mask], f'SAGE (z={z})')
+        )
+
     return data_by_z
 
 def load_shuntov_data():

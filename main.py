@@ -172,10 +172,10 @@ def main():
                           default='space.txt', type=_abspath)
     pso_opts.add_argument('-t', '--stat-test', help='Stat function used to calculate the value of a particle, defaults to student-t',
                           default='student-t', choices=list(analysis.stat_tests.keys()))
-    pso_opts.add_argument('-x', '--constraints', default='BHMF,SMF_z0,BHBM',
-                          help=("Comma-separated list of constraints, any of BHMF, SMF_z0 or BHBM, defaults to 'BHMF,SMF_z0,BHBM'. "
-                                "Can specify a domain range after the name (e.g., 'SMF_z0(8-11)')"
-                                "and/or a relative weight (e.g. 'BHMF*6,SMF_z0(8-11)*10)'") )
+    pso_opts.add_argument('-x', '--constraints', default='BHMF_z0,SMF_z0,BHBM,HIMF',
+                          help=("Comma-separated list of constraints. Valid names: BHMF_z0, BHMF_z10, SMF_z0, SMF_z05, SMF_z10, SMF_z20, SMF_z30, SMF_z40, BHBM, HIMF, CSFRDH, H2MF, SMD, MZR, SHMR. "
+                                "Can specify a domain range after the name (e.g., 'SMF_z0(8-11)') "
+                                "and/or a relative weight (e.g. 'BHMF_z0*6,SMF_z0(8-11)*10)')") )
     pso_opts.add_argument('-csv', '--csv-output', help='Path to save PSO results as CSV file. If not specified, no CSV will be generated.',
                       type=_abspath, default=None)
     pso_opts.add_argument('-r', '--random-seed', help='Random seed for reproducibility. If not specified, PSO will use random initialization.',
