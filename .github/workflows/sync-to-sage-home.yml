@@ -1,0 +1,27 @@
+name: Sync to sage-home/SAGEswarm
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    if: github.repository == 'MBradley1985/SAGEswarm'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # full history needed for mirror push
+          persist-credentials: false  # prevent GITHUB_TOKEN overriding the PAT below
+
+      - name: Push to sage-home/SAGEswarm
+        env:
+          SAGE_HOME_TOKEN: ${{ secrets.SAGE_HOME_TOKEN }}
+        run: |
+          git remote add sage-home https://x-access-token:${SAGE_HOME_TOKEN}@github.com/sage-home/SAGEswarm.git
+          # Force: this repo is the source of truth, so the mirror must follow
+          # even when a branch here was rebased or force-updated (e.g. dev
+          # being reset to main after a squash-merge).
+          git push --force sage-home ${{ github.ref_name }}
