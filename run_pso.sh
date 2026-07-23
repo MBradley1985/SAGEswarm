@@ -3,8 +3,8 @@
 CONFIG_PATH="../SAGE26/input/millennium.par"
 BASE_PATH="../SAGE26/sage"
 OUTPUT_PATH="./millennium_pso"
-PARTICLES=10
-ITERATIONS=5
+PARTICLES=25
+ITERATIONS=100
 TEST="chi2"
 CONSTRAINTS="SMF_z0"
 AGE_ALIST_FILE_MINI_MILLENNIUM="../SAGE26/input/millennium/trees/millennium.a_list"
