@@ -484,7 +484,7 @@ class Constraint(object):
         ax.legend(loc='best', fontsize=8, frameon=False)
         ax.grid(alpha=0.3)
         
-        plotfile = os.path.join(output_dir, f'{self.__class__.__name__}_diagnostic.pdf')
+        plotfile = os.path.join(output_dir, f'{self.__class__.__name__}_diagnostic.png')
         plt.savefig(plotfile, dpi=100, bbox_inches='tight')
         plt.close()
         return

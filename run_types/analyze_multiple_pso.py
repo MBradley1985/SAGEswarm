@@ -197,7 +197,7 @@ def create_summary_plots(results_df, best_positions, best_fitnesses, param_names
         ax.grid(True, alpha=0.3)
     
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'parameter_distributions.pdf'), dpi=150, bbox_inches='tight')
+    plt.savefig(os.path.join(output_dir, 'parameter_distributions.png'), dpi=150, bbox_inches='tight')
     plt.close()
     
     # 2. Fitness distribution across runs
@@ -223,7 +223,7 @@ def create_summary_plots(results_df, best_positions, best_fitnesses, param_names
     ax.legend()
     
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'fitness_distribution.pdf'), dpi=150, bbox_inches='tight')
+    plt.savefig(os.path.join(output_dir, 'fitness_distribution.png'), dpi=150, bbox_inches='tight')
     plt.close()
     
     # 3. Corner plot (if we have more than 1 parameter)
@@ -280,7 +280,7 @@ def create_summary_plots(results_df, best_positions, best_fitnesses, param_names
         cbar = fig.colorbar(scatter, cax=cbar_ax, orientation='horizontal')
         cbar.set_label('Fitness Value', fontsize=10)
         
-        plt.savefig(os.path.join(output_dir, 'parameter_corner_plot.pdf'), dpi=150, bbox_inches='tight')
+        plt.savefig(os.path.join(output_dir, 'parameter_corner_plot.png'), dpi=150, bbox_inches='tight')
         plt.close()
     
     print(f"\nPlots saved in {output_dir}")
@@ -485,7 +485,7 @@ def create_variability_plots(results_df, variability_df, best_positions, param_n
     ax.grid(True, alpha=0.3, axis='x')
     
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'parameter_variability.pdf'), dpi=150, bbox_inches='tight')
+    plt.savefig(os.path.join(output_dir, 'parameter_variability.png'), dpi=150, bbox_inches='tight')
     plt.close()
     
     # 2. Parameter correlation heatmap
@@ -515,7 +515,7 @@ def create_variability_plots(results_df, variability_df, best_positions, param_n
         cbar.set_label('Correlation Coefficient', rotation=270, labelpad=20)
         
         plt.tight_layout()
-        plt.savefig(os.path.join(output_dir, 'parameter_correlations.pdf'), dpi=150, bbox_inches='tight')
+        plt.savefig(os.path.join(output_dir, 'parameter_correlations.png'), dpi=150, bbox_inches='tight')
         plt.close()
     
     # 3. Variability vs Fitness correlation
@@ -558,7 +558,7 @@ def create_variability_plots(results_df, variability_df, best_positions, param_n
     ax.axvline(5.0, color='gray', linestyle='--', alpha=0.3)
     
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'variability_vs_sensitivity.pdf'), dpi=150, bbox_inches='tight')
+    plt.savefig(os.path.join(output_dir, 'variability_vs_sensitivity.png'), dpi=150, bbox_inches='tight')
     plt.close()
 
 def print_summary(results_df, best_fitnesses):
@@ -654,7 +654,7 @@ def print_variability_summary(variability_df):
         print("  4. Insufficient number of PSO runs")
         
         print("\nSuggested actions:")
-        print("  1. Check parameter_correlations.pdf for correlated parameters")
+        print("  1. Check parameter_correlations.png for correlated parameters")
         print("  2. Consider fixing well-constrained parameters in future runs")
         print("  3. Increase number of PSO particles or iterations")
         print("  4. Review if these parameters truly affect your observables")
