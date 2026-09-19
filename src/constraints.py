@@ -19,7 +19,7 @@ import pandas as pd # type: ignore
 from scipy.stats import binned_statistic # type: ignore
 import logging
 import scipy.stats as stats
-from src.simulation_config import get_csfrdh_snapshots, get_smd_snapshots
+from src.simulation_config import get_csfrdh_snapshots, get_smd_snapshots, get_fics_snapshots
 
 warnings.filterwarnings("ignore")
 logging.getLogger('constraints').setLevel(logging.INFO)
@@ -58,6 +58,60 @@ ssfrbins = np.arange(ssfrlow,ssfrupp,dssfr)
 
 Nmin = 10 # minimum number of galaxies expected in a mass bin for the simulation volume, based on observations, to warrant fitting to that bin for mass functions
 
+#######################
+# Intracluster-star (ICS) fraction selection.
+#
+# f_ICS = m_ICS / M_*,halo, with M_*,halo = m_ICS + m_BCG + sum(m_satellites),
+# measured for central galaxies of groups and clusters.  The cuts below mirror
+# those used for the same quantity in the SAGE26 analysis
+# (SAGE26/plotting/random_plotting_scripts/BCG_ICS_fraction.py).
+#
+# The halo-mass floor is deliberately low so the model averages over the same
+# mix of systems as the compilation it is scored against: that compilation keeps
+# its group-scale measurements (Ragusa+23 VEGAS groups, Ahad+25 KiDS+GAMA
+# groups, ~25 of 86 points, probing 10^12.5-10^13.5) alongside the cluster
+# samples, so restricting the model to cluster haloes would compare unlike
+# populations.
+#
+# It also buys redshift coverage that a cluster-scale floor cannot give in a
+# small box.  In miniMillennium (62.5/h Mpc) this cut selects 270-510 haloes at
+# every snapshot from z = 0 to z = 2, where a 10^13.5 floor leaves 0-2 above
+# z ~ 1 and drops those snapshots below FICS_MIN_HALOES entirely.
+#
+# Note that the other cuts raise the effective floor above 10^12 on their own:
+# requiring a resolved BCG and at least two satellites means the selected haloes
+# actually span 10^12.0-10^14.2 at z = 0.
+FICS_MVIR_MIN = 10 ** 12.0          # Msun; groups and richer
+FICS_STELLARMASS_MIN = 8.6e8        # Msun; BCG must be properly resolved
+FICS_MIN_SATELLITES = 2             # must actually be a group/cluster
+FICS_BCG_MVIR_RATIO_MIN = 10 ** -3.5  # reject pathological undersized centrals
+                                      # (merger-tree edge cases with
+                                      #  m_BCG/M_vir ~ 10^-5 instead of ~10^-2)
+FICS_MIN_HALOES = 5                 # fewest selected haloes for a usable median
+FICS_MVIR_BIN_WIDTH = 0.25          # dex, for the f_ICS-vs-halo-mass relation
+FICS_MVIR_BIN_MIN = 5               # fewest haloes in a halo-mass bin to use it
+
+#######################
+# Galactic-wind mass loading, eta = Mdot_outflow / SFR, against circular
+# velocity.  Applies to the MLF constraint only, on the same principle as the
+# FICS_* cuts above: read nowhere but mlf_binned().
+#
+# SAGE only assigns MassLoading inside the FIRE branch of the supernova
+# feedback (model_starformation_and_feedback.c:741), so the field is identically
+# zero for FIREmodeOn = 0 and the constraint reports such a run as not
+# applicable rather than as a fit.
+MLF_SFR_MIN = 1e-3                  # Msun/yr; eta is undefined without star formation
+MLF_VVIR_MIN = 20.0                 # km/s; below this the haloes are unresolved
+MLF_BIN_WIDTH = 0.15                # dex in log10 v_circ
+MLF_BIN_MIN = 20                    # fewest galaxies in a velocity bin to use it
+#
+# These cuts apply to the FICS constraint ONLY.  They are read nowhere but
+# fics_median(), which returns a single number per snapshot and never touches the
+# galaxy arrays that the mass functions, the MZR and the SHMR are built from.  If
+# you ever need a halo cut for another constraint, add it in that constraint --
+# do not filter the shared arrays in _load_model_data, which every constraint
+# reads.  tests/test_fics_selection.py asserts this separation holds.
+
 # These are two easily create variables of these different shapes without
 # actually storing a reference ourselves; we don't need it
 zeros1 = lambda: np.zeros(shape=(1, 3, len(xmf)))
@@ -72,8 +126,171 @@ zeros9 = lambda: np.zeros(shape=(1, len(mbins)))
 zeros10 = lambda: np.zeros(shape=(1, 3, len(xmf_h1)))
 zeros11 = lambda: np.zeros(shape=(1, 3, len(xmf_h2)))
 
+def satellite_stellar_mass(G, stellar_mass):
+    """Sum satellite stellar mass onto the central galaxy of each FOF group.
+
+    Returns an array the same length as the catalogue holding, for every
+    central, the summed stellar mass of its satellites (and zero for
+    satellites themselves).  Satellites are matched to their host through
+    CentralGalaxyIndex -> GalaxyIndex; satellites whose central is missing
+    from the catalogue are dropped rather than mis-assigned.
+    """
+    galaxy_index = np.asarray(G['GalaxyIndex'])
+    central_index = np.asarray(G['CentralGalaxyIndex'])
+    is_satellite = np.asarray(G['Type']) != 0
+
+    satellite_mass = np.zeros(len(stellar_mass))
+    n_satellites = np.zeros(len(stellar_mass), dtype=np.int64)
+    if len(galaxy_index) == 0 or not np.any(is_satellite):
+        return satellite_mass, n_satellites
+
+    order = np.argsort(galaxy_index)
+    sorted_ids = galaxy_index[order]
+    wanted = central_index[is_satellite]
+
+    pos = np.searchsorted(sorted_ids, wanted)
+    pos = np.clip(pos, 0, len(sorted_ids) - 1)
+    matched = sorted_ids[pos] == wanted
+    host = np.where(matched, order[pos], -1)
+    good = host >= 0
+
+    np.add.at(satellite_mass, host[good], stellar_mass[is_satellite][good])
+    np.add.at(n_satellites, host[good], 1)
+    return satellite_mass, n_satellites
+
+
+def fics_per_halo(G, h0):
+    """Per-halo ICS mass fraction for the groups and clusters of one snapshot.
+
+    f_ICS = m_ICS / (m_ICS + m_BCG + sum m_satellites), evaluated for central
+    galaxies passing the FICS_* cuts defined at the top of this module.
+    Returns (log10 M_vir, f_ICS) for the selected haloes, both possibly empty.
+
+    An empty return is also what happens for a SAGE build that does not output
+    IntraClusterStars: read_sage_hdf fills absent fields with zeros and the
+    m_ICS > 0 cut then rejects everything.  The FICS constraints report such a
+    run as not applicable rather than as a fit.
+    """
+    stellar_mass = np.asarray(G['StellarMass'], dtype=np.float64) * 1e10 / h0
+    ics_mass = np.asarray(G['IntraClusterStars'], dtype=np.float64) * 1e10 / h0
+    mvir = np.asarray(G['Mvir'], dtype=np.float64) * 1e10 / h0
+    is_central = np.asarray(G['Type']) == 0
+
+    satellite_mass, n_satellites = satellite_stellar_mass(G, stellar_mass)
+    total_stellar = stellar_mass + satellite_mass + ics_mass
+
+    # m_BCG/M_vir guards against merger-tree edge cases that leave a central
+    # orders of magnitude too small for its halo; those would otherwise
+    # inflate f_ICS towards 1.
+    with np.errstate(divide='ignore', invalid='ignore'):
+        bcg_mvir_ratio = np.where(mvir > 0, stellar_mass / mvir, 0.0)
+
+    sel = (is_central
+           & (mvir >= FICS_MVIR_MIN)
+           & (ics_mass > 0)
+           & (stellar_mass >= FICS_STELLARMASS_MIN)
+           & (total_stellar > 0)
+           & (n_satellites >= FICS_MIN_SATELLITES)
+           & (bcg_mvir_ratio >= FICS_BCG_MVIR_RATIO_MIN))
+
+    if not np.any(sel):
+        return np.array([]), np.array([])
+    return np.log10(mvir[sel]), ics_mass[sel] / total_stellar[sel]
+
+
+def mlf_binned(G):
+    """Median mass-loading factor in bins of circular velocity.
+
+    Returns (log10 v_circ, log10 eta, error on log10 eta) for the bins with
+    enough star-forming galaxies to measure, all possibly empty.  Empty is also
+    what a run with FIREmodeOn = 0 gives, since MassLoading is never assigned
+    there.
+
+    v_circ is Vvir, which SAGE stores in km/s directly (no h scaling), and eta
+    is dimensionless, so neither needs converting.
+    """
+    eta = np.asarray(G['MassLoading'], dtype=np.float64)
+    vvir = np.asarray(G['Vvir'], dtype=np.float64)
+    sfr = (np.asarray(G['SfrDisk'], dtype=np.float64)
+           + np.asarray(G['SfrBulge'], dtype=np.float64))
+
+    sel = (np.isfinite(eta) & (eta > 0)
+           & np.isfinite(vvir) & (vvir >= MLF_VVIR_MIN)
+           & (sfr >= MLF_SFR_MIN))
+    if not np.any(sel):
+        return np.array([]), np.array([]), np.array([])
+
+    log_v = np.log10(vvir[sel])
+    log_eta = np.log10(eta[sel])
+
+    edges = np.arange(np.floor(log_v.min() / MLF_BIN_WIDTH) * MLF_BIN_WIDTH,
+                      log_v.max() + MLF_BIN_WIDTH, MLF_BIN_WIDTH)
+    centres, medians, errors = [], [], []
+    for i in range(len(edges) - 1):
+        in_bin = (log_v >= edges[i]) & (log_v < edges[i + 1])
+        n = int(np.count_nonzero(in_bin))
+        if n < MLF_BIN_MIN:
+            continue
+        vals = log_eta[in_bin]
+        # x at the median velocity of the bin's members: the velocity function
+        # falls steeply, so members crowd the low-velocity edge.
+        centres.append(float(np.median(log_v[in_bin])))
+        medians.append(float(np.median(vals)))
+        errors.append(max(1.253 * float(np.std(vals)) / np.sqrt(n), 1e-3))
+
+    return np.array(centres), np.array(medians), np.array(errors)
+
+
+def fics_median(G, h0):
+    """Median ICS mass fraction over the groups and clusters of one snapshot.
+
+    Returns (median, standard error of the median), or (nan, nan) when fewer
+    than FICS_MIN_HALOES haloes qualify.
+    """
+    _, f_ics = fics_per_halo(G, h0)
+    n_sel = len(f_ics)
+    if n_sel < FICS_MIN_HALOES:
+        return np.nan, np.nan
+
+    median = float(np.median(f_ics))
+    # Standard error of the median for a roughly normal sample; the 1.253
+    # factor is sqrt(pi/2).  Floored so a coincidentally tight sample cannot
+    # produce a zero model error.
+    err = 1.253 * float(np.std(f_ics)) / np.sqrt(n_sel)
+    return median, max(err, 1e-3)
+
 class Constraint(object):
     """Base classes for constraint objects"""
+
+    # Whether this constraint needs the per-halo ICS fraction.  Measuring it
+    # costs an argsort over the whole catalogue per snapshot, and it applies a
+    # halo-mass and satellite-count selection that is meaningful only for FICS,
+    # so constraints that do not use it skip the work entirely.
+    needs_fics = False
+
+    # Whether this constraint needs the per-galaxy mass-loading factor.  Same
+    # principle as needs_fics: the MLF_* cuts are meaningful only for MLF, and
+    # a constraint that does not use them should not pay for the binning.
+    needs_mlf = False
+
+    # Bin width in dex for constraints whose y value is a number density built
+    # by counting objects per bin (the mass functions).  Set it and count_scale
+    # below recovers the underlying counts from log10(phi), which is what the
+    # Poisson/Cash statistic needs.  None means "not a counting statistic", and
+    # cash falls back to chi2 for such a constraint.
+    bin_width = None
+
+    @property
+    def count_scale(self):
+        """dm * V, converting phi [Mpc^-3 dex^-1] back into object counts.
+
+        A mass function's model value is a histogram: N = phi * dm * V.  Anything
+        that wants to treat those counts as Poisson has to be able to undo the
+        normalisation, and this is the factor that does it.
+        """
+        if self.bin_width is None:
+            return None
+        return self.bin_width * self.vol
 
     def __init__(self, snapshot=None, sim=None, boxsize=None, vol_frac=None, age_alist_file=None, Omega0=None, h0=None, output_dir=None):
         self.redshift_table = None
@@ -110,6 +327,10 @@ class Constraint(object):
             self.vol = (boxsize/h0)**3 * vol_frac
             self.age_alist_file = age_alist_file
 
+    def _fics_for_snapshot(self, G):
+        """Median ICS mass fraction over the groups and clusters of one snapshot."""
+        return fics_median(G, self.h0)
+
     def _load_model_data(self, modeldir, subvols):
         # Allow snapshots to be a list
         if not isinstance(self.snapshot, list):
@@ -120,6 +341,20 @@ class Constraint(object):
         num_snapshots = len(self.snapshot)
         SFRbyAge = np.zeros(num_snapshots)
         SMD_history = np.zeros(num_snapshots) # [FIX] Array to store SMD history
+        # ICS mass fraction history: median f_ICS over the selected groups and
+        # clusters at each snapshot, plus the standard error on that median.
+        # NaN marks a snapshot with too few haloes to measure (see FICS).
+        FICS_history = np.full(num_snapshots, np.nan)
+        FICS_history_err = np.full(num_snapshots, np.nan)
+        # Per-halo f_ICS at the reference snapshot, for the f_ICS-vs-halo-mass
+        # relation.  Only that snapshot is needed, so unlike FICS_history these
+        # are filled once rather than per snapshot.
+        FICS_halo_mass = np.array([])
+        FICS_halo_frac = np.array([])
+        # Mass-loading relation at the reference snapshot, for MLF.
+        MLF_x = np.array([])
+        MLF_y = np.array([])
+        MLF_err = np.array([])
         SnapshotTimes = np.zeros(num_snapshots)  # Store lookback time for each snapshot
         
         # For hist_smf, hist_bhmf, etc., always use the last (most recent) snapshot
@@ -132,7 +367,7 @@ class Constraint(object):
                 subvols = ["multiple_batches"]
 
             seed(2222)
-            fields = ['StellarMass', 'BlackHoleMass', 'Len', 'SfrBulge', 'BulgeMass', 'Mvir', 'SfrDisk', 'ColdGas', 'H1gas', 'H2gas', 'MetalsColdGas']
+            fields = ['StellarMass', 'BlackHoleMass', 'Len', 'SfrBulge', 'BulgeMass', 'Mvir', 'SfrDisk', 'ColdGas', 'H1gas', 'H2gas', 'MetalsColdGas', 'IntraClusterStars', 'Type', 'GalaxyIndex', 'CentralGalaxyIndex', 'MassLoading', 'Vvir']
             snap_num = f'Snap_{snap}'
             sSFRcut = -11.0
 
@@ -163,6 +398,16 @@ class Constraint(object):
             # [FIX] Calculate SMD for THIS snapshot (for history constraints)
             stellar_mass_total_snap = np.sum(G['StellarMass'] * 1e10 / self.h0)
             SMD_history[snap_idx] = stellar_mass_total_snap / self.vol # Msun / Mpc^3
+
+            # Calculate the ICS mass fraction for THIS snapshot (for the FICS
+            # history constraint).  f_ICS is a per-halo quantity, so it needs the
+            # stellar mass of every satellite summed onto its central before the
+            # ratio can be formed.  Only FICS asks for this: its halo-mass and
+            # satellite-count cuts have no bearing on any other constraint, and
+            # skipping it avoids an argsort over the catalogue.
+            if self.needs_fics:
+                FICS_history[snap_idx], FICS_history_err[snap_idx] = \
+                    self._fics_for_snapshot(G)
 
             # Store snapshot number to calculate time later (after alist is loaded)
             # We'll calculate the times after loading the alist properly below
@@ -253,6 +498,17 @@ class Constraint(object):
                 else:
                     metallicity = np.array([])
                     stellar_mass_mzr = np.array([])
+
+                # Per-halo f_ICS at this (reference) snapshot, for FICS_Mvir.
+                # Gated the same way as FICS_history: only a constraint that
+                # asks for it pays the cost, and the FICS_* halo cuts stay
+                # confined to those constraints.
+                if self.needs_fics:
+                    FICS_halo_mass, FICS_halo_frac = fics_per_halo(G, self.h0)
+
+                # Mass-loading vs circular velocity, gated the same way.
+                if self.needs_mlf:
+                    MLF_x, MLF_y, MLF_err = mlf_binned(G)
 
                 # Calculate Stellar-Halo Mass Relation (SHMR)
                 w_shmr = np.where((G['Mvir'] > 0) & (G['StellarMass'] > 0))[0]
@@ -443,9 +699,9 @@ class Constraint(object):
 
         # [FIX] Return SMD_history instead of scalar 'smd'
         if num_snapshots > 1:
-            return self.h0, self.Omega0, hist_smf, hist_bhmf, hist_himf, SnapshotTimes, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, SMD_history, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr
+            return self.h0, self.Omega0, hist_smf, hist_bhmf, hist_himf, SnapshotTimes, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, SMD_history, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr, FICS_history, FICS_history_err, FICS_halo_mass, FICS_halo_frac, MLF_x, MLF_y, MLF_err
         else:
-            return self.h0, self.Omega0, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, SMD_history, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr
+            return self.h0, self.Omega0, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, SMD_history, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr, FICS_history, FICS_history_err, FICS_halo_mass, FICS_halo_frac, MLF_x, MLF_y, MLF_err
 
 
     def load_observation(self, *args, **kwargs):
@@ -493,18 +749,18 @@ class Constraint(object):
         """Gets the model and observational data for further analysis.
         The model data is interpolated to match the observation's X values."""
 
-        self.h0, self.Omega0, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr = self._load_model_data(modeldir, subvols)
+        self.h0, self.Omega0, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr, fics_history, fics_history_err, fics_halo_mass, fics_halo_frac, mlf_x, mlf_y, mlf_err = self._load_model_data(modeldir, subvols)
         x_obs, y_obs, y_dn, y_up = self.get_obs_x_y_err()
         x_sage, y_sage = self.get_sage_x_y()
-        x_mod, y_mod, y_mod_err = self.get_model_x_y(hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr)
+        x_mod, y_mod, y_mod_err = self.get_model_x_y(hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr, fics_history, fics_history_err, fics_halo_mass, fics_halo_frac, mlf_x, mlf_y, mlf_err)
         return x_obs, y_obs, y_dn, y_up, x_sage, y_sage, x_mod, y_mod, y_mod_err
 
     def get_data(self, modeldir, subvols):
 
-        self.h0, self.Omega0, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr = self._load_model_data(modeldir, subvols)
+        self.h0, self.Omega0, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr, fics_history, fics_history_err, fics_halo_mass, fics_halo_frac, mlf_x, mlf_y, mlf_err = self._load_model_data(modeldir, subvols)
         x_obs, y_obs, y_dn, y_up = self.get_obs_x_y_err()
         x_sage, y_sage = self.get_sage_x_y()
-        x_mod, y_mod, y_mod_err = self.get_model_x_y(hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr)
+        x_mod, y_mod, y_mod_err = self.get_model_x_y(hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr, fics_history, fics_history_err, fics_halo_mass, fics_halo_frac, mlf_x, mlf_y, mlf_err)
 
         # Both observations and model values don't come necessarily in order,
         # but if at the end of the day we want to perform array-wise operations
@@ -547,9 +803,13 @@ class Constraint(object):
             constraint_name = self.__class__.__name__
             filename = os.path.join(self.output_dir, f"{constraint_name}_dump.txt")
             with open(filename, 'a') as f:
+                # err is written too so diagnostics can recompute the score with
+                # either stat test (chi2 or student-t) from the dump alone,
+                # rather than only being able to plot the curves.
                 f.write(f"# New Data Block\n")
-                for x_val, y_val, mod_y_val in zip(x_obs_sel, y_obs_sel, y_mod_sel):
-                    f.write(f"{x_val}\t{y_val}\t{mod_y_val}\n")
+                for x_val, y_val, mod_y_val, err_val in zip(
+                        x_obs_sel, y_obs_sel, y_mod_sel, err):
+                    f.write(f"{x_val}\t{y_val}\t{mod_y_val}\t{err_val}\n")
 
             self.plot_diagnostic(x_obs, y_obs, y_dn, y_up,
                                x_mod, y_mod, y_mod_interp,
@@ -566,9 +826,16 @@ class Constraint(object):
 class BHMF(Constraint):
     """Common logic for BHMF constraints"""
 
-    domain = (7.0, 10.5)  # below 10^7 Msun is TRINITY extrapolation, dominated by SAGE seed BHs
+    bin_width = dm2   # counts per dm2 dex bin -> Poisson/Cash
 
-    def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr):
+    domain = (7.0, 10.5)  # below 10^7 Msun is TRINITY extrapolation, dominated by SAGE seed BHs
+    # How many points to keep from the TRINITY curve.  It is a model, sampled
+    # every 0.1 dex; scoring all ~36 rows inside the domain would give the BHMF
+    # six times the point count of the black hole-bulge relation for no extra
+    # information, since neighbouring rows are not independent.
+    n_obs_points = 14
+
+    def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr, fics_history, fics_history_err, fics_halo_mass, fics_halo_frac, mlf_x, mlf_y, mlf_err):
         y = hist_bhmf[0]
         yerr = hist_bhmf_err[0]
         ind = np.where(y < 0.)
@@ -601,7 +868,16 @@ class BHMF_z0(BHMF):
         y_up = logphi_84th - logphi
 
         valid_mask = ~np.isnan(x_obs) & ~np.isnan(logphi) & ~np.isnan(y_dn) & ~np.isnan(y_up)
-        return x_obs[valid_mask], logphi[valid_mask], y_dn[valid_mask], y_up[valid_mask]
+        x_obs, logphi = x_obs[valid_mask], logphi[valid_mask]
+        y_dn, y_up = y_dn[valid_mask], y_up[valid_mask]
+
+        # Thin the smooth TRINITY curve inside the scored domain: it is sampled
+        # every 0.1 dex, so the ~36 rows in (7.0, 10.5) are perfectly correlated
+        # model points, not independent measurements.
+        in_domain = (x_obs >= self.domain[0]) & (x_obs <= self.domain[1])
+        idx = np.flatnonzero(in_domain)[
+            _subsample_curve(x_obs[in_domain], self.n_obs_points)]
+        return x_obs[idx], logphi[idx], y_dn[idx], y_up[idx]
 
     def get_sage_x_y(self):
         # Load data from SAGE
@@ -639,7 +915,16 @@ class BHMF_z10(BHMF):
         y_up = logphi_84th - logphi
 
         valid_mask = ~np.isnan(x_obs) & ~np.isnan(logphi) & ~np.isnan(y_dn) & ~np.isnan(y_up)
-        return x_obs[valid_mask], logphi[valid_mask], y_dn[valid_mask], y_up[valid_mask]
+        x_obs, logphi = x_obs[valid_mask], logphi[valid_mask]
+        y_dn, y_up = y_dn[valid_mask], y_up[valid_mask]
+
+        # Thin the smooth TRINITY curve inside the scored domain: it is sampled
+        # every 0.1 dex, so the ~36 rows in (7.0, 10.5) are perfectly correlated
+        # model points, not independent measurements.
+        in_domain = (x_obs >= self.domain[0]) & (x_obs <= self.domain[1])
+        idx = np.flatnonzero(in_domain)[
+            _subsample_curve(x_obs[in_domain], self.n_obs_points)]
+        return x_obs[idx], logphi[idx], y_dn[idx], y_up[idx]
     
     def get_sage_x_y(self):
         # Load data from SAGE
@@ -669,6 +954,23 @@ class BHMF_z10(BHMF):
 # only where ranges are complementary; elsewhere the most recent appropriate
 # survey is used on its own.
 # ---------------------------------------------------------------------------
+
+def _subsample_curve(x, n_target):
+    """Indices of ~n_target evenly spaced points along x.
+
+    The TRINITY black hole mass functions are smooth model curves sampled every
+    0.1 dex, not independent measurements.  Scoring every row gives one
+    constraint tens of perfectly correlated points and a correspondingly
+    inflated share of the objective (the same reason CSFRDH subsamples its
+    4001-row table).  Thinning to a handful of points keeps the shape without
+    the double-counting.
+    """
+    x = np.asarray(x, dtype=float)
+    if len(x) <= n_target:
+        return np.arange(len(x))
+    targets = np.linspace(x.min(), x.max(), n_target)
+    return np.unique([int(np.argmin(np.abs(x - t))) for t in targets])
+
 
 def _np_load_cols(relpath, cols, skiprows=0):
     """Load whitespace columns relative to src/.
@@ -779,9 +1081,11 @@ def _load_gama_driver2022(h_model):
 class SMF(Constraint):
     """Common logic for SMF constraints"""
 
+    bin_width = dm   # counts per dm dex bin -> Poisson/Cash
+
     domain = (8.5, 12)
 
-    def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr):
+    def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr, fics_history, fics_history_err, fics_halo_mass, fics_halo_frac, mlf_x, mlf_y, mlf_err):
         y = hist_smf[0,:]
         yerr = hist_smf_err[0,:]
         ind = np.where(y < 0.)
@@ -796,8 +1100,14 @@ class SMF_z0(SMF):
         return _load_paper_smf(0.0, 0.2, self.h0, labels=('Baldry+08',))
 
     def get_sage_x_y(self):
-        # Load data from SAGE
-        logm, phi = self.load_observation('../data/sage_smf_all_redshifts.csv', cols=[0,1])
+        # Diagnostic reference curve only -- it is not scored.  The file is
+        # regenerated per run and its width depends on the reference epoch
+        # list, so a stale or narrower file must not break the objective.
+        try:
+            logm, phi = self.load_observation(
+                '../data/sage_smf_all_redshifts.csv', cols=[0, 1])
+        except Exception:
+            return np.zeros(1), np.zeros(1)
         # Remove NaN values
         logphi = np.log10(phi)
         valid_mask = ~np.isnan(logm) & ~np.isnan(logphi)
@@ -815,8 +1125,14 @@ class SMF_z05(SMF):
         return _load_paper_smf(0.5, 0.8, self.h0)
 
     def get_sage_x_y(self):
-        # Load data from SAGE
-        logm, phi = self.load_observation('../data/sage_smf_all_redshifts.csv', cols=[4,5])
+        # Diagnostic reference curve only -- it is not scored.  The file is
+        # regenerated per run and its width depends on the reference epoch
+        # list, so a stale or narrower file must not break the objective.
+        try:
+            logm, phi = self.load_observation(
+                '../data/sage_smf_all_redshifts.csv', cols=[4, 5])
+        except Exception:
+            return np.zeros(1), np.zeros(1)
         # Remove NaN values
         logphi = np.log10(phi)
         valid_mask = ~np.isnan(logm) & ~np.isnan(logphi)
@@ -834,8 +1150,14 @@ class SMF_z10(SMF):
         return _load_paper_smf(0.8, 1.2, self.h0)
 
     def get_sage_x_y(self):
-        # Load data from SAGE
-        logm, phi = self.load_observation('../data/sage_smf_extra_redshifts.csv', cols=[4,5])
+        # Diagnostic reference curve only -- it is not scored.  The file is
+        # regenerated per run and its width depends on the reference epoch
+        # list, so a stale or narrower file must not break the objective.
+        try:
+            logm, phi = self.load_observation(
+                '../data/sage_smf_all_redshifts.csv', cols=[4, 5])
+        except Exception:
+            return np.zeros(1), np.zeros(1)
         # Remove NaN values
         logphi = np.log10(phi)
         valid_mask = ~np.isnan(logm) & ~np.isnan(logphi)
@@ -853,8 +1175,14 @@ class SMF_z20(SMF):
         return _load_paper_smf(1.8, 2.3, self.h0)
 
     def get_sage_x_y(self):
-        # Load data from SAGE
-        logm, phi = self.load_observation('../data/sage_smf_all_redshifts.csv', cols=[12,13])
+        # Diagnostic reference curve only -- it is not scored.  The file is
+        # regenerated per run and its width depends on the reference epoch
+        # list, so a stale or narrower file must not break the objective.
+        try:
+            logm, phi = self.load_observation(
+                '../data/sage_smf_all_redshifts.csv', cols=[12, 13])
+        except Exception:
+            return np.zeros(1), np.zeros(1)
         # Remove NaN values
         logphi = np.log10(phi)
         valid_mask = ~np.isnan(logm) & ~np.isnan(logphi)
@@ -872,8 +1200,14 @@ class SMF_z30(SMF):
         return _load_paper_smf(2.8, 3.3, self.h0)
 
     def get_sage_x_y(self):
-        # Load data from SAGE
-        logm, phi = self.load_observation('../data/sage_smf_all_redshifts.csv', cols=[16,17])
+        # Diagnostic reference curve only -- it is not scored.  The file is
+        # regenerated per run and its width depends on the reference epoch
+        # list, so a stale or narrower file must not break the objective.
+        try:
+            logm, phi = self.load_observation(
+                '../data/sage_smf_all_redshifts.csv', cols=[16, 17])
+        except Exception:
+            return np.zeros(1), np.zeros(1)
         # Remove NaN values
         logphi = np.log10(phi)
         valid_mask = ~np.isnan(logm) & ~np.isnan(logphi)
@@ -891,8 +1225,14 @@ class SMF_z40(SMF):
         return _load_paper_smf(3.8, 4.3, self.h0)
 
     def get_sage_x_y(self):
-        # Load data from SAGE
-        logm, phi = self.load_observation('../data/sage_smf_all_redshifts.csv', cols=[20,21])
+        # Diagnostic reference curve only -- it is not scored.  The file is
+        # regenerated per run and its width depends on the reference epoch
+        # list, so a stale or narrower file must not break the objective.
+        try:
+            logm, phi = self.load_observation(
+                '../data/sage_smf_all_redshifts.csv', cols=[20, 21])
+        except Exception:
+            return np.zeros(1), np.zeros(1)
         # Remove NaN values
         logphi = np.log10(phi)
         valid_mask = ~np.isnan(logm) & ~np.isnan(logphi)
@@ -1049,9 +1389,11 @@ class SMF_z100(SMF):
 class SMF_Red(Constraint):
     """Base class for Red/Quiescent SMF constraints"""
 
+    bin_width = dm   # counts per dm dex bin -> Poisson/Cash
+
     domain = (8.5, 12)
 
-    def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr):
+    def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr, fics_history, fics_history_err, fics_halo_mass, fics_halo_frac, mlf_x, mlf_y, mlf_err):
         y = hist_smf_red[0,:]
         yerr = hist_smf_red_err[0,:]
         ind = np.where(y < 0.)
@@ -1088,9 +1430,11 @@ class SMF_Red_z0(SMF_Red):
 class SMF_Blue(Constraint):
     """Base class for Blue/Star-forming SMF constraints"""
 
+    bin_width = dm   # counts per dm dex bin -> Poisson/Cash
+
     domain = (8.5, 12)
 
-    def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr):
+    def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr, fics_history, fics_history_err, fics_halo_mass, fics_halo_frac, mlf_x, mlf_y, mlf_err):
         y = hist_smf_blue[0,:]
         yerr = hist_smf_blue_err[0,:]
         ind = np.where(y < 0.)
@@ -1134,9 +1478,14 @@ class CSFRDH(Constraint):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Get simulation-specific CSFRDH snapshots
-        self.z = get_csfrdh_snapshots(self.sim)
-        self.snapshot = self.z
+        # The snapshots come from parse(), which resolved them against the SAGE
+        # output's own redshift table; re-deriving them here from a simulation
+        # id would discard that and reintroduce the hard-coded mapping.
+        if self.snapshot is None:
+            self.snapshot = get_csfrdh_snapshots(self.sim)
+        elif not isinstance(self.snapshot, list):
+            self.snapshot = [self.snapshot]
+        self.z = self.snapshot
     
     def get_obs_x_y_err(self):
         """COSMOS-Web cosmic SFR density, inferred from the stellar mass density.
@@ -1165,7 +1514,7 @@ class CSFRDH(Constraint):
         y_obs = np.log10(s50[idx])
         return tL[idx], y_obs, y_obs - np.log10(s16[idx]), np.log10(s84[idx]) - y_obs
 
-    def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr):
+    def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr, fics_history, fics_history_err, fics_halo_mass, fics_halo_frac, mlf_x, mlf_y, mlf_err):
         # TimeBinEdge now contains the actual snapshot times (lookback times in Gyr) for CSFRDH
         # Ignore the hist_smf and hist_bhmf arrays which contain -20 values
         # For CSFRDH, errors are not well-defined, return zeros
@@ -1191,7 +1540,7 @@ class BHBM(Constraint):
     domain = (9.0, 12.0)
     z = [0]
 
-    def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr):
+    def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr, fics_history, fics_history_err, fics_halo_mass, fics_halo_frac, mlf_x, mlf_y, mlf_err):
 
         mask = (BlackHoleMass > 0) & (BulgeMass > 0) & np.isfinite(BlackHoleMass) & np.isfinite(BulgeMass)
         y = BlackHoleMass[mask]
@@ -1216,6 +1565,11 @@ class BHBM(Constraint):
                 bin_centers.append((bin_edges[i] + bin_edges[i+1]) / 2.0)
                 median_bh_mass.append(np.median(y[bin_mask]))
                 N_bin = np.sum(bin_mask)
+                # Error on the median, because the observations are binned to
+                # medians too (see get_obs_x_y_err).  Using the full intrinsic
+                # scatter here instead would make the total error large enough
+                # that chi2/n sits near 1 whatever the relation does, and the
+                # constraint would stop discriminating between models.
                 std_bin = np.std(y[bin_mask]) if N_bin > 1 else 0.3
                 bin_errors.append(max(std_bin / np.sqrt(N_bin), 0.05))
 
@@ -1225,26 +1579,37 @@ class BHBM(Constraint):
         return np.array(bin_centers), np.array(median_bh_mass), np.array(bin_errors)
 
     def get_obs_x_y_err(self):
-        # Combined individual galaxy measurements binned to match model output.
-        # Comparing 154 individual galaxies to model medians inflates chi² with
-        # physical scatter; bin first so both sides are median-per-bin.
+        """Compilation binned to medians, to match the model's median relation.
+
+        Scott+2013 (75) + Davis+2019 (41 spirals) + Sahu+2019 (41 E/S0) = 157
+        galaxies.  They are binned rather than used individually because
+        get_model_x_y returns a median relation, not a population: comparing a
+        cloud of individual galaxies against a single median curve makes the
+        residuals dominated by the intrinsic scatter of the relation rather
+        than by whether the relation itself is right.  Widening the errors to
+        absorb that scatter does not help -- it drives chi2/n towards 1 for any
+        model and the constraint stops discriminating.  Binning both sides to
+        medians keeps the comparison sensitive to the quantity being
+        calibrated, at the cost of the per-galaxy errors, which are smaller
+        than the bin-to-bin scatter anyway.
+        """
         log_mbulge, log_mbh, _, _ = self.load_observation(
             '../data/bhbm_obs_combined.csv', cols=[0, 1, 2, 3], skiprows=3)
 
-        bin_edges = np.arange(9.0, 12.1, 0.4)  # coarser than model bins — ~7 obs bins
+        bin_edges = np.arange(9.0, 12.1, 0.4)  # coarser than model bins -- ~7 obs bins
         bin_centers, median_bh, bin_err = [], [], []
         for i in range(len(bin_edges) - 1):
             mask = (log_mbulge >= bin_edges[i]) & (log_mbulge < bin_edges[i + 1])
             if np.sum(mask) >= 3:
                 bin_centers.append((bin_edges[i] + bin_edges[i + 1]) / 2.0)
-                med = np.median(log_mbh[mask])
-                median_bh.append(med)
+                median_bh.append(np.median(log_mbh[mask]))
                 N = np.sum(mask)
                 scatter = np.std(log_mbh[mask]) if N > 1 else 0.3
                 bin_err.append(max(scatter / np.sqrt(N), 0.05))
 
         x_obs = np.array(bin_centers)
         y_obs = np.array(median_bh)
+        bin_err = np.array(bin_err)
         err = np.array(bin_err)
         return x_obs, y_obs, err, err
     
@@ -1258,6 +1623,8 @@ class BHBM(Constraint):
 
 class HIMF(Constraint):
     """The HI Mass Function constraint"""
+
+    bin_width = dm_h1   # counts per dm_h1 dex bin -> Poisson/Cash
 
     domain = (8.0, 10.75)
     z = [0]
@@ -1275,7 +1642,7 @@ class HIMF(Constraint):
 
         return x_obs, y_obs, y_dn, y_up
 
-    def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr):
+    def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr, fics_history, fics_history_err, fics_halo_mass, fics_halo_frac, mlf_x, mlf_y, mlf_err):
         y = hist_himf[0]
         yerr = hist_himf_err[0]
         ind = np.where(y < 0.)
@@ -1293,6 +1660,8 @@ class HIMF(Constraint):
 
 class H2MF(Constraint):
     """The H2 Mass Function constraint"""
+
+    bin_width = dm_h2   # counts per dm_h2 dex bin -> Poisson/Cash
 
     domain = (8.25, 10.1)
     z = [0]
@@ -1312,7 +1681,7 @@ class H2MF(Constraint):
 
         return logm, logphi, np.abs(y_dn), np.abs(y_up)
 
-    def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr):
+    def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr, fics_history, fics_history_err, fics_halo_mass, fics_halo_frac, mlf_x, mlf_y, mlf_err):
         y = hist_h2mf[0]
         yerr = hist_h2mf_err[0]
         ind = np.where(y < 0.)
@@ -1328,6 +1697,64 @@ class H2MF(Constraint):
         return x_sage, y_sage
 
 
+def _load_madau_dickinson_smd(z_max=None):
+    """Stellar mass density compilation from Madau & Dickinson (2014).
+
+    Their table gives a redshift interval per measurement rather than a single
+    redshift, so the interval midpoint is used.  Errors are asymmetric and
+    sometimes absent; a missing error becomes the median of the quoted ones so
+    the point still carries information without dominating.
+
+    Pass z_max to keep only points below that redshift, which is how SMD avoids
+    double-counting the range COSMOS2020 already covers.
+    """
+    DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
+    path = os.path.join(DATA_DIR, 'MandD_smd_2014.ecsv')
+    if not os.path.exists(path):
+        return (np.array([]),) * 4
+
+    z_mid, rho, err_up, err_dn = [], [], [], []
+    for line in open(path):
+        line = line.strip()
+        if not line or line.startswith('#') or line.startswith('Reference'):
+            continue
+        # Reference is a quoted string that contains spaces
+        tail = line.rsplit('"', 1)[-1] if '"' in line else line
+        parts = tail.split()
+        if len(parts) < 4:
+            continue
+        try:
+            zlo, zhi, lr = float(parts[0]), float(parts[1]), float(parts[2])
+            eu = float(parts[3]) if len(parts) > 3 else np.nan
+            ed = float(parts[4]) if len(parts) > 4 else np.nan
+        except ValueError:
+            continue
+        if not np.isfinite(lr):
+            continue
+        z_mid.append(0.5 * (zlo + zhi))
+        rho.append(lr)
+        err_up.append(eu)
+        err_dn.append(ed)
+
+    z_mid = np.array(z_mid); rho = np.array(rho)
+    err_up = np.array(err_up); err_dn = np.array(err_dn)
+    if len(z_mid) == 0:
+        return (np.array([]),) * 4
+
+    quoted = np.concatenate([err_up[np.isfinite(err_up)],
+                             err_dn[np.isfinite(err_dn)]])
+    fallback = float(np.median(quoted)) if len(quoted) else 0.15
+    err_up = np.where(np.isfinite(err_up), err_up, fallback)
+    err_dn = np.where(np.isfinite(err_dn), err_dn, fallback)
+
+    if z_max is not None:
+        keep = z_mid < z_max
+        z_mid, rho, err_up, err_dn = z_mid[keep], rho[keep], err_up[keep], err_dn[keep]
+
+    order = np.argsort(z_mid)
+    return z_mid[order], rho[order], np.abs(err_dn[order]), np.abs(err_up[order])
+
+
 class SMD(Constraint):
     """Stellar Mass Density constraint vs redshift"""
 
@@ -1337,9 +1764,14 @@ class SMD(Constraint):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Get simulation-specific SMD snapshots
-        self.z = get_smd_snapshots(self.sim)
-        self.snapshot = self.z
+        # The snapshots come from parse(), which resolved them against the SAGE
+        # output's own redshift table; re-deriving them here from a simulation
+        # id would discard that and reintroduce the hard-coded mapping.
+        if self.snapshot is None:
+            self.snapshot = get_smd_snapshots(self.sim)
+        elif not isinstance(self.snapshot, list):
+            self.snapshot = [self.snapshot]
+        self.z = self.snapshot
 
     def get_obs_x_y_err(self):
         # ... (Keep your existing observation loading code) ...
@@ -1380,9 +1812,21 @@ class SMD(Constraint):
         y_dn = log_rho - log_rho_16
         y_up = log_rho_84 - log_rho
 
+        # Weaver+23 (COSMOS2020) starts at z = 0.35, but the constraint samples
+        # snapshots from z = 0, so the lowest-redshift model points had nothing
+        # to be scored against.  Madau & Dickinson (2014) compile measurements
+        # from z = 0.01 upward; take only their points below the COSMOS2020 floor
+        # so the two sets do not double-count the same redshifts.
+        z_lo, rho_lo, dn_lo, up_lo = _load_madau_dickinson_smd(z_max=z_obs.min())
+        if len(z_lo):
+            z_obs = np.concatenate([z_lo, z_obs])
+            log_rho = np.concatenate([rho_lo, log_rho])
+            y_dn = np.concatenate([dn_lo, y_dn])
+            y_up = np.concatenate([up_lo, y_up])
+
         return z_obs, log_rho, y_dn, y_up
 
-    def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr):
+    def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr, fics_history, fics_history_err, fics_halo_mass, fics_halo_frac, mlf_x, mlf_y, mlf_err):
         # <--- NEW: 'smd' is now the SMD_history array from the loader
         
         # Calculate redshifts corresponding to the snapshots
@@ -1402,6 +1846,342 @@ class SMD(Constraint):
         yerr = np.zeros_like(log_smd) 
         
         return z_model, log_smd, yerr
+
+    def get_sage_x_y(self):
+        logm, phi = np.zeros(1), np.zeros(1)
+        return logm, phi
+
+
+class FICS(Constraint):
+    """Intracluster-star mass fraction vs redshift.
+
+    f_ICS = m_ICS / M_*,halo, where M_*,halo = m_ICS + m_BCG + sum(m_satellites)
+    is the total stellar mass inside the halo.  Constrained from z = 0 to z = 2,
+    the range over which the observed ICL fractions in
+    data/ICL_fraction_compilation.dat are measured.
+
+    The measurement is a median over the groups and clusters of each snapshot
+    (selection cuts: FICS_* at the top of this module), so it is scored in linear
+    f_ICS rather than in a log, and the observations are binned in redshift with
+    the scatter between independent measurements taken as the error -- the
+    individual literature values carry no published uncertainty, and their
+    disagreement over how to split ICL from BCG light is the dominant term in
+    the error budget anyway.
+    """
+
+    # Redshift range scored, matching the span of the observations.  This is
+    # only safe while the model can measure f_ICS across the whole range:
+    # np.interp in Constraint.get_data extrapolates flat beyond the model's
+    # range, so a floor high enough to empty the high-z snapshots would score
+    # the upper observation bins against fabricated values.  get_model_x_y
+    # warns, naming the bins, if that ever happens.
+    domain = (0.0, 2.0)  # redshift
+    z = None             # set dynamically per simulation, as for CSFRDH and SMD
+    needs_fics = True    # the only constraint that applies the FICS_* halo cuts
+
+    # Redshift bin edges for the observational compilation.  Uneven by design:
+    # measurements crowd into z < 0.5 and thin out beyond it, so the high-z bins
+    # are wide enough to keep at least a few independent points each.
+    obs_z_bins = np.array([0.0, 0.1, 0.2, 0.3, 0.4, 0.55, 0.9, 2.05])
+    obs_min_per_bin = 3     # bins with fewer points are dropped as unmeasured
+    obs_err_floor = 0.02    # absolute floor on the f_ICS error, in fraction units
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # The snapshots come from parse(), which resolved them against the SAGE
+        # output's own redshift table; re-deriving them here from a simulation
+        # id would discard that and reintroduce the hard-coded mapping.
+        if self.snapshot is None:
+            self.snapshot = get_fics_snapshots(self.sim)
+        elif not isinstance(self.snapshot, list):
+            self.snapshot = [self.snapshot]
+        self.z = self.snapshot
+
+    def get_obs_x_y_err(self):
+        """Compilation of observed ICL/ICS mass fractions, binned in redshift.
+
+        Each bin returns the median f_ICS of its points, with the 16th/84th
+        percentiles as asymmetric errors.  Points with f_ICS <= 0 are dropped:
+        the one such entry in the compilation is a digitisation artefact, not a
+        cluster with no ICL.
+        """
+        DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
+        obs_data = np.loadtxt(os.path.join(DATA_DIR, 'ICL_fraction_compilation.dat'),
+                              comments='#', usecols=(0, 1))
+
+        z_obs = obs_data[:, 0]
+        f_obs = obs_data[:, 1]
+
+        valid = np.isfinite(z_obs) & np.isfinite(f_obs) & (f_obs > 0)
+        z_obs, f_obs = z_obs[valid], f_obs[valid]
+
+        x, y, y_dn, y_up = [], [], [], []
+        edges = self.obs_z_bins
+        for i in range(len(edges) - 1):
+            in_bin = (z_obs >= edges[i]) & (z_obs < edges[i + 1])
+            if np.count_nonzero(in_bin) < self.obs_min_per_bin:
+                continue
+            f_bin = f_obs[in_bin]
+            median = np.median(f_bin)
+            x.append(np.median(z_obs[in_bin]))
+            y.append(median)
+            y_dn.append(max(median - np.percentile(f_bin, 16), self.obs_err_floor))
+            y_up.append(max(np.percentile(f_bin, 84) - median, self.obs_err_floor))
+
+        return np.array(x), np.array(y), np.array(y_dn), np.array(y_up)
+
+    def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr, fics_history, fics_history_err, fics_halo_mass, fics_halo_frac, mlf_x, mlf_y, mlf_err):
+        # fics_history holds the median f_ICS per snapshot, NaN where too few
+        # groups and clusters qualified to measure it.
+        alist_full = np.loadtxt(self.age_alist_file)
+        z_model = np.zeros(len(self.snapshot))
+
+        for i, snap in enumerate(self.snapshot):
+            if snap < len(alist_full):
+                z_model[i] = 1.0 / alist_full[snap] - 1.0
+
+        f_model = np.asarray(fics_history, dtype=np.float64)
+        f_err = np.asarray(fics_history_err, dtype=np.float64)
+
+        measured = np.isfinite(f_model) & (f_model > 0)
+        if np.count_nonzero(measured) < 2:
+            # Nothing measurable -- either the box holds no groups or the SAGE
+            # build does not output IntraClusterStars.  Return a flat dummy with
+            # a large error so the constraint cannot masquerade as a good fit.
+            logging.getLogger('constraints').warning(
+                'FICS: fewer than two snapshots yielded a measurable ICS '
+                'fraction; this run cannot be scored on FICS')
+            return np.array([0.0, 2.0]), np.array([0.0, 0.0]), np.array([1.0, 1.0])
+
+        z_measured = z_model[measured]
+
+        # Guard the flat extrapolation described above.  What matters is not
+        # whether the measured range covers the domain exactly, but whether any
+        # observation bin that will actually be scored lies outside it -- those
+        # are the ones np.interp would fabricate a model value for.
+        lo, hi = self.domain
+        x_obs = self.get_obs_x_y_err()[0]
+        scored = x_obs[(x_obs >= lo) & (x_obs <= hi)]
+        beyond = scored[(scored < z_measured.min()) | (scored > z_measured.max())]
+        if len(beyond) and not getattr(self, '_warned_coverage', False):
+            self._warned_coverage = True
+            logging.getLogger('constraints').warning(
+                'FICS: model measures f_ICS only over z = %.2f-%.2f, so the '
+                'observation bins at z = %s are scored against a flat '
+                'extrapolation. Narrow the domain to FICS(%.2f-%.2f) or use a '
+                'box with cluster statistics to higher z.',
+                z_measured.min(), z_measured.max(),
+                ', '.join('%.2f' % b for b in beyond),
+                max(lo, z_measured.min()), min(hi, z_measured.max()))
+
+        return z_measured, f_model[measured], f_err[measured]
+
+    def get_sage_x_y(self):
+        logm, phi = np.zeros(1), np.zeros(1)
+        return logm, phi
+
+
+class FICS_Mvir(Constraint):
+    """Intracluster-star mass fraction as a function of host halo mass, at z = 0.
+
+    f_ICS = m_ICS / M_*,halo, where M_*,halo = m_ICS + m_BCG + sum(m_satellites),
+    binned by log10 M_vir and compared with the Contini (2021) compilation in
+    data/Contini2021_ICL_fraction_vs_Mvir.dat.
+
+    This is the observable that separates the SAGE26 disruption-split
+    mechanisms.  They differ in how the ICS/BCG split depends on the
+    satellite-to-host mass ratio, so their distinguishing prediction is the
+    slope of f_ICS with halo mass: the fixed-fraction mode has none by
+    construction, while the mass-ratio and concentration-weighted modes each
+    predict a different one.  FICS constrains f_ICS(z), which marginalises over
+    halo mass and so cannot tell them apart -- all three can reproduce the same
+    mean fraction.  Use the two together.
+
+    The observations are rich clusters (log10 M_vir = 14.2-15.1), so the box has
+    to contain such haloes: microUchuu (100/h Mpc) reaches ~10^14.6 and covers
+    the lower half, miniMillennium (62.5/h Mpc) reaches ~10^14.2 and covers
+    none.  get_model_x_y warns, naming the points, when the model cannot reach
+    them rather than letting np.interp fabricate values for them.
+    """
+
+    # Full log10 M_vir range the observations span.  parse() can only narrow a
+    # domain, never widen it, so this has to be the outer bound.
+    #
+    # NARROW IT TO MATCH YOUR BOX.  np.interp in Constraint.get_data extrapolates
+    # flat, not along a slope, so an observation above the model's richest
+    # halo-mass bin is scored against that bin's value.  microUchuu (100/h Mpc)
+    # tops out around log10 M_vir ~ 14.42, so it wants FICS_Mvir(14-14.45),
+    # which admits the two lowest points (Krick & Bernstein 2007, Zibetti+05).
+    # miniUchuu (400/h Mpc, 64x the volume) reaches past 10^15 and can use the
+    # full range.  get_model_x_y warns, naming the points, whenever the model
+    # cannot bracket what the domain admits -- do not ignore that warning.
+    domain = (14.0, 15.2)
+    z = [0]
+    needs_fics = True
+
+    def get_obs_x_y_err(self):
+        """Contini (2021) compilation of f_ICL against host halo mass."""
+        DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
+        obs = np.loadtxt(os.path.join(DATA_DIR,
+                                      'Contini2021_ICL_fraction_vs_Mvir.dat'),
+                         comments='#', usecols=(0, 1, 2))
+        logm, f_ics, err = obs[:, 0], obs[:, 1], obs[:, 2]
+        valid = np.isfinite(logm) & np.isfinite(f_ics) & (f_ics > 0)
+        logm, f_ics, err = logm[valid], f_ics[valid], err[valid]
+        return logm, f_ics, err.copy(), err.copy()
+
+    def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr, fics_history, fics_history_err, fics_halo_mass, fics_halo_frac, mlf_x, mlf_y, mlf_err):
+        # fics_halo_mass / fics_halo_frac are the per-halo values at the z = 0
+        # snapshot; bin them by halo mass the way MZR and SHMR bin theirs.
+        logm = np.asarray(fics_halo_mass, dtype=np.float64)
+        f_ics = np.asarray(fics_halo_frac, dtype=np.float64)
+
+        if len(logm) < FICS_MVIR_BIN_MIN:
+            logging.getLogger('constraints').warning(
+                'FICS_Mvir: only %d haloes passed the FICS selection; this run '
+                'cannot be scored on the f_ICS-halo mass relation', len(logm))
+            return np.array([14.0, 15.0]), np.array([0.0, 0.0]), np.array([1.0, 1.0])
+
+        edges = np.arange(np.floor(logm.min() / FICS_MVIR_BIN_WIDTH)
+                          * FICS_MVIR_BIN_WIDTH,
+                          logm.max() + FICS_MVIR_BIN_WIDTH,
+                          FICS_MVIR_BIN_WIDTH)
+        centres, medians, errors = [], [], []
+        for i in range(len(edges) - 1):
+            in_bin = (logm >= edges[i]) & (logm < edges[i + 1])
+            n = int(np.count_nonzero(in_bin))
+            if n < FICS_MVIR_BIN_MIN:
+                continue
+            vals = f_ics[in_bin]
+            # x is the median halo mass of the bin's members rather than the bin
+            # centre: the mass function falls steeply, so members cluster near
+            # the low-mass edge and the centre would misplace the point.
+            centres.append(float(np.median(logm[in_bin])))
+            medians.append(float(np.median(vals)))
+            errors.append(max(1.253 * float(np.std(vals)) / np.sqrt(n), 1e-3))
+
+        if len(centres) < 2:
+            logging.getLogger('constraints').warning(
+                'FICS_Mvir: fewer than two usable halo-mass bins; this run '
+                'cannot be scored on the f_ICS-halo mass relation')
+            return np.array([14.0, 15.0]), np.array([0.0, 0.0]), np.array([1.0, 1.0])
+
+        centres = np.array(centres)
+
+        # Guard the flat extrapolation in Constraint.get_data: report any
+        # observation that will be scored but that the model cannot bracket.
+        lo, hi = self.domain
+        x_obs = self.get_obs_x_y_err()[0]
+        scored = x_obs[(x_obs >= lo) & (x_obs <= hi)]
+        beyond = scored[(scored < centres.min()) | (scored > centres.max())]
+        if len(beyond) and not getattr(self, '_warned_coverage', False):
+            self._warned_coverage = True
+            logging.getLogger('constraints').warning(
+                'FICS_Mvir: model haloes span log10 Mvir = %.2f-%.2f, so the '
+                'observations at log10 Mvir = %s are scored against a flat '
+                'extrapolation. Narrow the domain to FICS_Mvir(%.2f-%.2f) or '
+                'use a box containing richer clusters.',
+                centres.min(), centres.max(),
+                ', '.join('%.2f' % b for b in beyond),
+                max(lo, centres.min()), min(hi, centres.max()))
+
+        return centres, np.array(medians), np.array(errors)
+
+    def get_sage_x_y(self):
+        logm, phi = np.zeros(1), np.zeros(1)
+        return logm, phi
+
+
+class MLF(Constraint):
+    """Galactic-wind mass-loading factor against circular velocity, at z = 0.
+
+    eta = Mdot_outflow / SFR, binned in log10 v_circ and compared with the
+    compilation in data/mass_loading_compilation.dat (Rupke+05, Heckman+15,
+    Chisholm+17, Sugahara+17).
+
+    This is the observable that speaks most directly to the supernova feedback
+    parameters.  FeedbackReheatingEpsilon sets eta's normalisation and
+    RedshiftPowerLawExponent its redshift scaling, but the stellar mass function
+    constrains them only indirectly, through the stellar mass that survives the
+    outflow.  Constraining eta itself separates "the right amount of gas is
+    being ejected" from "the right amount of stellar mass happens to be left".
+
+    Requires FIREmodeOn = 1: SAGE assigns MassLoading only inside the FIRE
+    branch of the feedback, so the field is identically zero otherwise and this
+    constraint reports the run as not applicable rather than as a fit.
+    """
+
+    # log10 v_circ range scored, covering the compilation (53-459 km/s).
+    domain = (1.9, 2.7)
+    z = [0]
+    needs_mlf = True
+
+    obs_bin_width = MLF_BIN_WIDTH
+    obs_min_per_bin = 3      # bins with fewer independent measurements are dropped
+    obs_err_floor = 0.10     # dex; no published errors survive the digitisation
+
+    def get_obs_x_y_err(self):
+        """Compilation of measured mass-loading factors, binned in log v_circ.
+
+        The digitised measurements carry no uncertainties, so as for FICS the
+        error is the scatter between independent measurements in each velocity
+        bin -- which for outflow rates is the dominant term anyway: the papers
+        disagree about which gas phase and which aperture define the outflow,
+        and two galaxies at the same v_circ can differ by an order of magnitude.
+        """
+        DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
+        obs = np.loadtxt(os.path.join(DATA_DIR, 'mass_loading_compilation.dat'),
+                         comments='#', usecols=(0, 1))
+        v, eta = obs[:, 0], obs[:, 1]
+        valid = np.isfinite(v) & np.isfinite(eta) & (v > 0) & (eta > 0)
+        log_v, log_eta = np.log10(v[valid]), np.log10(eta[valid])
+
+        edges = np.arange(np.floor(log_v.min() / self.obs_bin_width) * self.obs_bin_width,
+                          log_v.max() + self.obs_bin_width, self.obs_bin_width)
+        x, y, y_dn, y_up = [], [], [], []
+        for i in range(len(edges) - 1):
+            in_bin = (log_v >= edges[i]) & (log_v < edges[i + 1])
+            if np.count_nonzero(in_bin) < self.obs_min_per_bin:
+                continue
+            vals = log_eta[in_bin]
+            median = float(np.median(vals))
+            x.append(float(np.median(log_v[in_bin])))
+            y.append(median)
+            y_dn.append(max(median - np.percentile(vals, 16), self.obs_err_floor))
+            y_up.append(max(np.percentile(vals, 84) - median, self.obs_err_floor))
+
+        return np.array(x), np.array(y), np.array(y_dn), np.array(y_up)
+
+    def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr, fics_history, fics_history_err, fics_halo_mass, fics_halo_frac, mlf_x, mlf_y, mlf_err):
+        x = np.asarray(mlf_x, dtype=np.float64)
+        y = np.asarray(mlf_y, dtype=np.float64)
+        err = np.asarray(mlf_err, dtype=np.float64)
+
+        if len(x) < 2:
+            logging.getLogger('constraints').warning(
+                'MLF: no measurable mass loading (SAGE only sets MassLoading '
+                'for FIREmodeOn = 1); this run cannot be scored on the '
+                'mass-loading relation')
+            return (np.array([self.domain[0], self.domain[1]]),
+                    np.array([0.0, 0.0]), np.array([1.0, 1.0]))
+
+        # Same coverage guard as FICS/FICS_Mvir: np.interp extrapolates flat,
+        # so report any scored observation the model cannot bracket.
+        lo, hi = self.domain
+        x_obs = self.get_obs_x_y_err()[0]
+        scored = x_obs[(x_obs >= lo) & (x_obs <= hi)]
+        beyond = scored[(scored < x.min()) | (scored > x.max())]
+        if len(beyond) and not getattr(self, '_warned_coverage', False):
+            self._warned_coverage = True
+            logging.getLogger('constraints').warning(
+                'MLF: model covers log10 v_circ = %.2f-%.2f, so the '
+                'observations at %s are scored against a flat extrapolation. '
+                'Narrow the domain to MLF(%.2f-%.2f).',
+                x.min(), x.max(),
+                ', '.join('%.2f' % b for b in beyond),
+                max(lo, x.min()), min(hi, x.max()))
+
+        return x, y, err
 
     def get_sage_x_y(self):
         logm, phi = np.zeros(1), np.zeros(1)
@@ -1429,7 +2209,7 @@ class MZR(Constraint):
 
         return logm, metallicity, y_dn, y_up
 
-    def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr):
+    def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr, fics_history, fics_history_err, fics_halo_mass, fics_halo_frac, mlf_x, mlf_y, mlf_err):
         # Bin the metallicity data by stellar mass
         if len(stellar_mass_mzr) < 10:
             yerr_dummy = np.array([0.3, 0.3])
@@ -1487,7 +2267,7 @@ class SHMR(Constraint):
 
         return logm_halo, logm_stellar, y_dn, y_up
 
-    def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr):
+    def get_model_x_y(self, hist_smf, hist_bhmf, hist_himf, TimeBinEdge, SFRD_Age, BlackHoleMass, BulgeMass, HaloMass, StellarMass, hist_smf_red, hist_smf_blue, hist_smf_err, hist_smf_red_err, hist_smf_blue_err, hist_bhmf_err, hist_himf_err, hist_h2mf, hist_h2mf_err, smd, metallicity, stellar_mass_mzr, halo_mass_shmr, stellar_mass_shmr, fics_history, fics_history_err, fics_halo_mass, fics_halo_frac, mlf_x, mlf_y, mlf_err):
         # Bin the SHMR data by halo mass
         if len(halo_mass_shmr) < 10:
             yerr_dummy = np.array([0.3, 0.3])
@@ -1527,11 +2307,21 @@ class SHMR(Constraint):
 _constraint_re = re.compile((r'([0-9_a-zA-Z]+)' # name
                               r'(?:\(([0-9\.]+)-([0-9\.]+)\))?' # domain boundaries
                               r'(?:\*([0-9\.]+))?')) # weight
-def parse(spec, snapshot=None, sim=None, boxsize=None, vol_frac=None, age_alist_file=None, Omega0=None, h0=None, output_dir=None):
+def parse(spec, snapshot=None, sim=None, boxsize=None, vol_frac=None, age_alist_file=None, Omega0=None, h0=None, output_dir=None, snapshot_map=None):
     """Parses a comma-separated string of constraint names into a list of
-    Constraint objects. Specific domain values can be specified in `spec`"""
-    from src.simulation_config import get_snapshot_map as _get_snapshot_map
-    _snapshot_map = _get_snapshot_map(sim if sim is not None else 0)
+    Constraint objects. Specific domain values can be specified in `spec`.
+
+    `snapshot_map` is the constraint-to-snapshot mapping resolved from the SAGE
+    output (simulation_config.build_snapshot_map), so each constraint gets the
+    snapshot closest to the redshift its observations were measured at.  If it
+    is not supplied the legacy hard-coded per-simulation table is used, which is
+    only correct for the three simulations it was written for.
+    """
+    if snapshot_map is None:
+        from src.simulation_config import get_snapshot_map as _get_snapshot_map
+        _snapshot_map = _get_snapshot_map(sim if sim is not None else 0)
+    else:
+        _snapshot_map = snapshot_map
 
     _constraints = {
         'BHMF_z0': BHMF_z0,
@@ -1555,7 +2345,10 @@ def parse(spec, snapshot=None, sim=None, boxsize=None, vol_frac=None, age_alist_
         'H2MF': H2MF,
         'SMD': SMD,
         'MZR': MZR,
-        'SHMR': SHMR
+        'SHMR': SHMR,
+        'FICS': FICS,
+        'FICS_Mvir': FICS_Mvir,
+        'MLF': MLF
     }
 
     def _parse(s,output_dir):

@@ -11,11 +11,18 @@ from matplotlib.colors import Normalize
 from matplotlib.cm import ScalarMappable
 
 def load_space(space_file):
-    """Load parameter space definition"""
-    return np.genfromtxt(space_file, 
-                        dtype=[('name', 'U30'), ('plot_label', 'U30'), 
-                              ('is_log', 'i4'), ('lb', 'f8'), ('ub', 'f8')],
-                        delimiter=',')
+    """Load parameter space definition.
+
+    Delegates to analysis.load_space so there is a single parser for the space
+    file format; a local copy would silently mis-read the integer-switch
+    sampling code (column 3 == 2) as a log-sampled parameter.
+    """
+    import os
+    import sys
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__)))))
+    from src import analysis
+    return analysis.load_space(space_file)
 
 def load_pso_data(tracks_dir):
     """

@@ -74,7 +74,7 @@ def load_space_and_particles(tracks_dir, space_file):
     pos, fx = np.asarray(pos), np.asarray(fx)
     pos = np.moveaxis(pos, 0, -1)
     fx = np.moveaxis(fx, 0, -1)
-    logger.info("Position shape: %s, Fitness shape: %s", str(pos.shape), str(fx.shape))
+    logger.debug('Position shape: %s, Fitness shape: %s', pos.shape, fx.shape)
     #logger.info(fx)
     #logger.info(pos)
 
@@ -254,6 +254,33 @@ def create_iteration_plot(filename, num_particles, num_iterations, obs_data, sag
             'legend_loc': 'lower left',
             'transform_y': lambda y: y
         },
+        'FICS': {
+            'xlabel': r'$z$',
+            'ylabel': r'$f_{\mathrm{ICS}} = m_{\mathrm{ICS}} / M_{\star,\mathrm{halo}}$',
+            'xlim': [0.0, 2.0],
+            'ylim': [0.0, 0.5],
+            'yscale': 'linear',
+            'legend_loc': 'upper right',
+            'transform_y': lambda y: y
+        },
+        'FICS_Mvir': {
+            'xlabel': r'$\log_{10} M_{\mathrm{vir}}\ (M_{\odot})$',
+            'ylabel': r'$f_{\mathrm{ICS}} = m_{\mathrm{ICS}} / M_{\star,\mathrm{halo}}$',
+            'xlim': [13.5, 15.3],
+            'ylim': [0.0, 0.6],
+            'yscale': 'linear',
+            'legend_loc': 'upper left',
+            'transform_y': lambda y: y
+        },
+        'MLF': {
+            'xlabel': r'$\log_{10} v_{\mathrm{circ}}\ (\mathrm{km\ s}^{-1})$',
+            'ylabel': r'$\log_{10} \eta\ (\dot{M}_{\mathrm{out}}/\mathrm{SFR})$',
+            'xlim': [1.85, 2.75],
+            'ylim': [-1.5, 1.5],
+            'yscale': 'linear',
+            'legend_loc': 'upper right',
+            'transform_y': lambda y: y
+        },
         'CSFRDH': {
             'xlabel': r'Lookback Time (Gyr)',
             'ylabel': r'$\log_{10}$ SFRD $(M_{\odot}\ \mathrm{yr}^{-1}\ \mathrm{Mpc}^{-3})$',
@@ -419,6 +446,15 @@ def smd_processing_iteration(*args, **kwargs):
 
 def csfrdh_processing_iteration(*args, **kwargs):
     return create_iteration_plot(*args, **kwargs, plot_type='CSFRDH')
+
+def fics_processing_iteration(*args, **kwargs):
+    return create_iteration_plot(*args, **kwargs, plot_type='FICS')
+
+def fics_mvir_processing_iteration(*args, **kwargs):
+    return create_iteration_plot(*args, **kwargs, plot_type='FICS_Mvir')
+
+def mlf_processing_iteration(*args, **kwargs):
+    return create_iteration_plot(*args, **kwargs, plot_type='MLF')
 
 def load_all_params(directory, param_names, redshifts):
     """Load parameter values from CSV files"""
@@ -970,75 +1006,96 @@ def get_bhbm_files_map(config_opts):
     return bhbm_files
 
 
-def load_himf_obs_data():
-    """Load HIMF observational data from Zwaan et al. 2005"""
-    DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
+
+# Cosmology used when re-loading observations for plotting.  Some loaders
+# h-scale their data (HIMF, CSFRDH), so they need it; processing() sets this
+# from the run's own values so the plotted points match the scored ones exactly.
+_PLOT_COSMOLOGY = {'h0': 0.6774, 'Omega0': 0.3089}
+
+
+def set_plot_cosmology(h0=None, Omega0=None):
+    """Record the run's cosmology for observation loaders that h-scale."""
+    if h0:
+        _PLOT_COSMOLOGY['h0'] = float(h0)
+    if Omega0:
+        _PLOT_COSMOLOGY['Omega0'] = float(Omega0)
+
+
+def constraint_obs(constraint_name, label=None, fallback=None):
+    """Observations a constraint is actually scored against, for plotting.
+
+    Delegates to the constraint's own get_obs_x_y_err(), so a diagnostic plot
+    can never show a different dataset from the one the objective used.  Four
+    of these loaders had drifted: the HIMF plot showed Zwaan+2005 while the fit
+    used Jones+2018, the MZR plot showed Tremonti+2004 while the fit used
+    Curti+2020, the SHMR plot showed Moster+2013 while the fit used
+    Correa & Schaye 2019, and the CSFRDH plot pointed at a file that does not
+    exist and silently fell back to a two-point dummy.  Looking at those plots
+    would have told you the fit was better or worse than it was.
+
+    __new__ bypasses __init__ because only the observation loader is needed and
+    it does not depend on any simulation parameter.
+    """
+    from src import constraints as _C
     try:
-        obs_data = np.loadtxt(os.path.join(DATA_DIR, 'HIMF_Zwaan2005.dat'), comments='#')
-        x_obs = obs_data[:, 0]  # log10(MHI)
-        y_obs = obs_data[:, 1]  # log10(phi)
-        return (x_obs, y_obs, 'Zwaan et al. 2005')
-    except:
-        return (np.array([9.0, 10.0]), np.array([-2.0, -3.0]), 'Zwaan et al. 2005')
+        cls = getattr(_C, constraint_name)
+        c = cls.__new__(cls)
+        # Attributes the loaders may need; __init__ is skipped because it also
+        # resolves snapshots, which plotting does not require.
+        c.h0 = _PLOT_COSMOLOGY['h0']
+        c.Omega0 = _PLOT_COSMOLOGY['Omega0']
+        c.snapshot = None
+        x_obs, y_obs, _, _ = c.get_obs_x_y_err()
+        x_obs, y_obs = np.asarray(x_obs), np.asarray(y_obs)
+
+        # get_data scores only the points inside the domain, so those are the
+        # only ones the plot should show.  Without this the figure includes
+        # points the objective never saw -- the HIMF file reaches down to
+        # log M_HI = 6.5 but is only scored above 8.0, and the eye reads the
+        # unscored points as part of the fit.
+        lo, hi = getattr(cls, 'domain', (-np.inf, np.inf))
+        keep = (x_obs >= lo) & (x_obs <= hi)
+        if np.any(keep):
+            x_obs, y_obs = x_obs[keep], y_obs[keep]
+
+        return (x_obs, y_obs,
+                label or ('%s observations' % constraint_name))
+    except Exception as e:
+        logger.warning('could not load %s observations for plotting: %s',
+                       constraint_name, e)
+        if fallback is not None:
+            return fallback
+        return (np.array([np.nan, np.nan]), np.array([np.nan, np.nan]),
+                '%s observations (unavailable)' % constraint_name)
+
+def load_himf_obs_data():
+    """HIMF observations, as scored (see constraint_obs)."""
+    return constraint_obs('HIMF', label='Jones et al. 2018')
+
 
 
 def load_h2mf_obs_data():
-    """Load H2MF observational data from Fletcher et al. 2021"""
-    DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
-    try:
-        obs_data = np.loadtxt(os.path.join(DATA_DIR, 'H2MF_Fletcher21_DetNonDet.dat'), comments='#')
-        x_obs = obs_data[:, 0]  # log10(MH2)
-        y_obs = obs_data[:, 1]  # log10(phi)
-        return (x_obs, y_obs, 'Fletcher et al. 2021')
-    except:
-        return (np.array([9.0, 10.0]), np.array([-2.0, -3.0]), 'Fletcher et al. 2021')
+    """H2MF observations, as scored (see constraint_obs)."""
+    return constraint_obs('H2MF', label='Fletcher et al. 2021')
+
 
 
 def load_mzr_obs_data():
-    """Load MZR observational data from Tremonti et al. 2004"""
-    DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
-    try:
-        obs_data = np.loadtxt(os.path.join(DATA_DIR, 'Tremonti04.dat'), comments='#')
-        x_obs = obs_data[:, 0]  # log10(Mstars)
-        y_obs = obs_data[:, 1]  # 12+log(O/H)
-        return (x_obs, y_obs, 'Tremonti et al. 2004')
-    except:
-        return (np.array([9.0, 11.0]), np.array([8.5, 9.0]), 'Tremonti et al. 2004')
+    """MZR observations, as scored (see constraint_obs)."""
+    return constraint_obs('MZR', label='Curti et al. 2020')
+
 
 
 def load_shmr_obs_data():
-    """Load SHMR observational data from Moster et al. 2013"""
-    DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
-    try:
-        obs_data = np.loadtxt(os.path.join(DATA_DIR, 'Moster_2013.csv'), delimiter='\t')
-        x_obs = obs_data[:, 0]  # log10(Mhalo)
-        y_obs = obs_data[:, 1]  # log10(Mstars)
-        valid = ~np.isnan(x_obs) & ~np.isnan(y_obs)
-        return (x_obs[valid], y_obs[valid], 'Moster et al. 2013')
-    except:
-        return (np.array([12.0, 14.0]), np.array([10.0, 11.0]), 'Moster et al. 2013')
+    """SHMR observations, as scored (see constraint_obs)."""
+    return constraint_obs('SHMR', label='Correa & Schaye 2019')
+
 
 
 def load_smd_obs_data():
-    """Load SMD observational data"""
-    DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
-    try:
-        with open(os.path.join(DATA_DIR, 'SMD.ecsv'), 'r') as f:
-            lines = f.readlines()
-        data_start = 0
-        for i, line in enumerate(lines):
-            if not line.startswith('#') and 'z rho' not in line:
-                data_start = i
-                break
-        z_obs, rho_50 = [], []
-        for line in lines[data_start:]:
-            if line.strip():
-                parts = line.split()
-                z_obs.append(float(parts[0]))
-                rho_50.append(np.log10(float(parts[1])))
-        return (np.array(z_obs), np.array(rho_50), 'Weaver et al. 2023')
-    except:
-        return (np.array([0.0, 2.0]), np.array([8.0, 7.5]), 'Weaver et al. 2023')
+    """SMD observations, as scored (see constraint_obs)."""
+    return constraint_obs('SMD', label='Weaver et al. 2023 + Madau & Dickinson 2014')
+
 
 
 def load_sage_himf_data():
@@ -1250,17 +1307,116 @@ def get_smd_files_map(config_opts):
     return files
 
 
-def load_csfrdh_obs_data():
-    """Load CSFRDH observational data from Driver et al. 2023"""
-    DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
+def load_fics_obs_data():
+    """Load the binned ICS mass fraction compilation used by the FICS constraint.
+
+    Delegates to FICS.get_obs_x_y_err() so the diagnostic plot shows exactly the
+    binned points the optimiser is scored against, rather than a second,
+    independently binned version of the same compilation.
+    """
     try:
-        # Load Driver et al. 2023 data
-        obs_data = np.loadtxt(os.path.join(DATA_DIR, 'Driver23_CSFH.dat'), comments='#')
-        x_obs = obs_data[:, 0]  # Lookback time (Gyr)
-        y_obs = obs_data[:, 1]  # log10(SFRD)
-        return (x_obs, y_obs, 'Driver et al. 2023')
-    except:
-        return (np.array([0.0, 10.0]), np.array([-1.0, -2.0]), 'Driver et al. 2023')
+        from src.constraints import FICS
+        c = FICS.__new__(FICS)          # bypass __init__: only the obs loader is needed
+        x_obs, y_obs, _, _ = c.get_obs_x_y_err()
+        return (x_obs, y_obs, 'ICL fraction compilation')
+    except Exception as e:
+        logger.warning(f"Could not load ICL_fraction_compilation.dat: {e}")
+        return (np.array([0.05, 0.5, 1.2]), np.array([0.18, 0.06, 0.06]),
+                'ICL fraction compilation')
+
+
+def get_fics_files_map(config_opts):
+    """Create mapping of FICS dump files to their corresponding observational data"""
+    obs_data = load_fics_obs_data()
+    # LOAD ACTUAL SAGE DATA
+    hist_data = load_sage_history()
+    if hist_data is not None and hist_data.shape[1] > 4:
+        # Col 0 is Redshift, Col 4 is f_ICS (linear fraction, -99 where unmeasured)
+        x_sage = hist_data[:, 0]
+        y_sage = hist_data[:, 4]
+        valid = (np.isfinite(x_sage) & np.isfinite(y_sage) & (y_sage > 0)
+                 & (x_sage <= 2.0))
+        if np.any(valid):
+            sage_data = (x_sage[valid], y_sage[valid], 'SAGE')
+        else:
+            sage_data = (np.array([0.0, 2.0]), np.array([np.nan, np.nan]), 'SAGE (no ICS)')
+    else:
+        sage_data = (np.array([0.0, 2.0]), np.array([np.nan, np.nan]), 'SAGE (Missing)')
+
+    logger.debug("Checking for FICS dump files in directory...")
+    files = {}
+
+    filename = 'FICS_dump.txt'
+    filepath = os.path.join(config_opts.outdir, filename)
+    if os.path.exists(filepath):
+        logger.debug(f"Found: {filename}")
+        files[filename] = (obs_data, sage_data)
+    else:
+        logger.debug(f"Not found: {filename}")
+
+    logger.debug(f"Found {len(files)} FICS files to process")
+    return files
+
+
+def load_fics_mvir_obs_data():
+    """Load the Contini (2021) f_ICL-vs-halo-mass compilation.
+
+    Delegates to FICS_Mvir.get_obs_x_y_err() so the diagnostic plot shows the
+    same points the optimiser is scored against.
+    """
+    try:
+        from src.constraints import FICS_Mvir
+        c = FICS_Mvir.__new__(FICS_Mvir)   # bypass __init__: only obs needed
+        x_obs, y_obs, _, _ = c.get_obs_x_y_err()
+        return (x_obs, y_obs, 'Contini 2021 compilation')
+    except Exception as e:
+        logger.warning(f"Could not load Contini2021_ICL_fraction_vs_Mvir.dat: {e}")
+        return (np.array([14.2, 14.7, 15.1]), np.array([0.12, 0.24, 0.12]),
+                'Contini 2021 compilation')
+
+
+def get_fics_mvir_files_map(config_opts):
+    """Create mapping of FICS_Mvir dump files to their observational data"""
+    obs_data = load_fics_mvir_obs_data()
+    # No SAGE reference curve for this relation: sage_history.csv is a function
+    # of redshift, not halo mass, so there is nothing to overlay.
+    sage_data = (np.array([14.0, 15.0]), np.array([np.nan, np.nan]), 'SAGE (n/a)')
+
+    logger.debug("Checking for FICS_Mvir dump files in directory...")
+    files = {}
+    filename = 'FICS_Mvir_dump.txt'
+    filepath = os.path.join(config_opts.outdir, filename)
+    if os.path.exists(filepath):
+        logger.debug(f"Found: {filename}")
+        files[filename] = (obs_data, sage_data)
+    else:
+        logger.debug(f"Not found: {filename}")
+    logger.debug(f"Found {len(files)} FICS_Mvir files to process")
+    return files
+
+
+def load_mlf_obs_data():
+    """MLF observations, as scored (see constraint_obs)."""
+    return constraint_obs('MLF', label='outflow compilation (Rupke+05, '
+                                       'Heckman+15, Chisholm+17, Sugahara+17)')
+
+
+def get_mlf_files_map(config_opts):
+    """Create mapping of MLF dump files to their observational data"""
+    obs_data = load_mlf_obs_data()
+    sage_data = (np.array([1.9, 2.7]), np.array([np.nan, np.nan]), 'SAGE (n/a)')
+    files = {}
+    filename = 'MLF_dump.txt'
+    filepath = os.path.join(config_opts.outdir, filename)
+    if os.path.exists(filepath):
+        files[filename] = (obs_data, sage_data)
+    return files
+
+
+def load_csfrdh_obs_data():
+    """CSFRDH observations, as scored (see constraint_obs)."""
+    return constraint_obs('CSFRDH', label='COSMOS-Web, inferred from the SMD')
+
 
 
 def get_csfrdh_files_map(config_opts):
@@ -1591,12 +1747,12 @@ def plot_pso_corner(pos, fx, space, output_dir):
 
 
 def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
-    logger.info("Starting diagnostics analysis...")
+    logger.info("Diagnostics:")
 
     # Load particle data
     space, pos, fx = load_space_and_particles(tracks_dir, space_file)
     S, D, L = pos.shape
-    logger.info('Producing plots for S=%d particles, D=%d dimensions, L=%d iterations' % (S, D, L))
+    logger.debug('S=%d particles, D=%d dimensions, L=%d iterations' % (S, D, L))
 
     # Create output directory if needed
     os.makedirs(output_dir, exist_ok=True)
@@ -1610,7 +1766,37 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
         logger.error(f"Error creating corner plot: {e}")
 
     # Get SMF and BHMF files mapping with observational data
-    logger.info("Looking for dump files...")
+    # PSO health: convergence, per-constraint breakdown, parameter collapse and
+    # bound contact.  Produced first because it is what tells you whether the
+    # run is worth reading the constraint plots for.
+    stat_test = getattr(config_opts, 'stat_test', 'chi2')
+    set_plot_cosmology(getattr(config_opts, 'h0', None),
+                       getattr(config_opts, 'Omega0', None))
+    try:
+        health = create_pso_health_figure(
+            space, pos, fx, tracks_dir, output_dir, num_particles,
+            os.path.join(output_dir, 'pso_health.png'), stat_test=stat_test)
+        logger.info('  pso_health.png        convergence, constraint breakdown, '
+                    'parameter collapse, bound contact')
+    except Exception as e:
+        logger.warning('  could not build pso_health.png: %s', e)
+
+    try:
+        if plot_degeneracy(space, pos, fx,
+                           os.path.join(output_dir, 'pso_degeneracy.png')):
+            logger.info('  pso_degeneracy.png    parameter pairs coloured by fit quality')
+    except Exception as e:
+        logger.warning('  could not build pso_degeneracy.png: %s', e)
+
+    try:
+        if plot_residuals(output_dir, num_particles,
+                          os.path.join(output_dir, 'pso_residuals.png'),
+                          stat_test=stat_test):
+            logger.info('  pso_residuals.png     normalised residuals per constraint')
+    except Exception as e:
+        logger.warning('  could not build pso_residuals.png: %s', e)
+
+    logger.debug("Looking for dump files...")
     smf_files = get_smf_files_map(config_opts)
     logger.debug(f"Found {len(smf_files)} SMF files to process")
 
@@ -1644,18 +1830,27 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
     csfrdh_files = get_csfrdh_files_map(config_opts)
     logger.debug(f"Found {len(csfrdh_files)} CSFRDH files to process")
 
+    fics_files = get_fics_files_map(config_opts)
+    logger.debug(f"Found {len(fics_files)} FICS files to process")
+
+    mlf_files = get_mlf_files_map(config_opts)
+    logger.debug(f"Found {len(mlf_files)} MLF files to process")
+
+    fics_mvir_files = get_fics_mvir_files_map(config_opts)
+    logger.debug(f"Found {len(fics_mvir_files)} FICS_Mvir files to process")
+
     # Process SMF files
     processed_any_smf = False
     for filename, (obs_data, sage_data) in smf_files.items():
         filepath = os.path.join(output_dir, filename)
         
         if os.path.exists(filepath):
-            logger.info(f"\nProcessing {filename}...")
+            logger.debug(f"Processing {filename}...")
             processed_any_smf = True
             
             # Create iteration plot
             try:
-                logger.info("Creating iteration plot...")
+                logger.debug("Creating iteration plot...")
                 fig = smf_processing_iteration(
                     filepath,
                     num_particles,
@@ -1666,15 +1861,15 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
                 )
                 outfile = os.path.join(output_dir, f'{os.path.splitext(filename)[0]}_all.png')
                 fig.savefig(outfile, dpi=300)
-                logger.info(f"Saved iteration plot to {outfile}")
+                logger.info("  %s", os.path.basename(outfile))
                 plt.close(fig)
             except Exception as e:
                 logger.error(f"Error creating iteration plot: {str(e)}")
 
     if not processed_any_smf:
         logger.debug("Warning: No SMF files were found to process!")
-        logger.info(f"Expected files in: {output_dir}")
-        logger.info("Expected files: %s", list(smf_files.keys()))
+        logger.debug(f"Expected files in: {output_dir}")
+        logger.debug("Expected files: %s", list(smf_files.keys()))
 
     # Process SMF_Red files
     processed_any_smf_red = False
@@ -1682,12 +1877,12 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
         filepath = os.path.join(output_dir, filename)
 
         if os.path.exists(filepath):
-            logger.info(f"\nProcessing {filename}...")
+            logger.debug(f"Processing {filename}...")
             processed_any_smf_red = True
 
             # Create iteration plot
             try:
-                logger.info("Creating iteration plot...")
+                logger.debug("Creating iteration plot...")
                 fig = create_iteration_plot(
                     filepath,
                     num_particles,
@@ -1699,15 +1894,15 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
                 )
                 outfile = os.path.join(output_dir, f'{os.path.splitext(filename)[0]}_all.png')
                 fig.savefig(outfile, dpi=300)
-                logger.info(f"Saved iteration plot to {outfile}")
+                logger.info("  %s", os.path.basename(outfile))
                 plt.close(fig)
             except Exception as e:
                 logger.error(f"Error creating iteration plot: {str(e)}")
 
     if not processed_any_smf_red:
         logger.debug("Warning: No SMF_Red files were found to process!")
-        logger.info(f"Expected files in: {output_dir}")
-        logger.info("Expected files: %s", list(smf_red_files.keys()))
+        logger.debug(f"Expected files in: {output_dir}")
+        logger.debug("Expected files: %s", list(smf_red_files.keys()))
 
     # Process SMF_Blue files
     processed_any_smf_blue = False
@@ -1715,12 +1910,12 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
         filepath = os.path.join(output_dir, filename)
 
         if os.path.exists(filepath):
-            logger.info(f"\nProcessing {filename}...")
+            logger.debug(f"Processing {filename}...")
             processed_any_smf_blue = True
 
             # Create iteration plot
             try:
-                logger.info("Creating iteration plot...")
+                logger.debug("Creating iteration plot...")
                 fig = create_iteration_plot(
                     filepath,
                     num_particles,
@@ -1732,15 +1927,15 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
                 )
                 outfile = os.path.join(output_dir, f'{os.path.splitext(filename)[0]}_all.png')
                 fig.savefig(outfile, dpi=300)
-                logger.info(f"Saved iteration plot to {outfile}")
+                logger.info("  %s", os.path.basename(outfile))
                 plt.close(fig)
             except Exception as e:
                 logger.error(f"Error creating iteration plot: {str(e)}")
 
     if not processed_any_smf_blue:
         logger.debug("Warning: No SMF_Blue files were found to process!")
-        logger.info(f"Expected files in: {output_dir}")
-        logger.info("Expected files: %s", list(smf_blue_files.keys()))
+        logger.debug(f"Expected files in: {output_dir}")
+        logger.debug("Expected files: %s", list(smf_blue_files.keys()))
 
     # Process BHMF files
     processed_any_bhmf = False
@@ -1748,12 +1943,12 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
         filepath = os.path.join(output_dir, filename)
         
         if os.path.exists(filepath):
-            logger.info(f"\nProcessing {filename}...")
+            logger.debug(f"Processing {filename}...")
             processed_any_bhmf = True
             
             # Create iteration plot
             try:
-                logger.info("Creating iteration plot...")
+                logger.debug("Creating iteration plot...")
                 fig = bhmf_processing_iteration(
                     filepath,
                     num_particles,
@@ -1764,15 +1959,15 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
                 )
                 outfile = os.path.join(output_dir, f'{os.path.splitext(filename)[0]}_all.png')
                 fig.savefig(outfile, dpi=300)
-                logger.info(f"Saved iteration plot to {outfile}")
+                logger.info("  %s", os.path.basename(outfile))
                 plt.close(fig)
             except Exception as e:
                 logger.error(f"Error creating iteration plot: {str(e)}")
  
     if not processed_any_bhmf:
         logger.debug("Warning: No BHMF files were found to process!")
-        logger.info(f"Expected files in: {output_dir}")
-        logger.info("Expected files: %s", list(bhmf_files.keys())) 
+        logger.debug(f"Expected files in: {output_dir}")
+        logger.debug("Expected files: %s", list(bhmf_files.keys())) 
 
     # Process BHBM files
     processed_any_bhbm = False
@@ -1780,12 +1975,12 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
         filepath = os.path.join(output_dir, filename)
         
         if os.path.exists(filepath):
-            logger.info(f"\nProcessing {filename}...")
+            logger.debug(f"Processing {filename}...")
             processed_any_bhbm = True
             
             # Create iteration plot
             try:
-                logger.info("Creating iteration plot...")
+                logger.debug("Creating iteration plot...")
                 fig = bhbm_processing_iteration(
                     filepath,
                     num_particles,
@@ -1796,15 +1991,15 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
                 )
                 outfile = os.path.join(output_dir, f'{os.path.splitext(filename)[0]}_all.png')
                 fig.savefig(outfile, dpi=300)
-                logger.info(f"Saved iteration plot to {outfile}")
+                logger.info("  %s", os.path.basename(outfile))
                 plt.close(fig)
             except Exception as e:
                 logger.error(f"Error creating iteration plot: {str(e)}")
 
     if not processed_any_bhbm:
         logger.debug("Warning: No BHBM files were found to process!")
-        logger.info(f"Expected files in: {output_dir}")
-        logger.info("Expected files: %s", list(bhbm_files.keys()))
+        logger.debug(f"Expected files in: {output_dir}")
+        logger.debug("Expected files: %s", list(bhbm_files.keys()))
 
     # Process HIMF files
     processed_any_himf = False
@@ -1812,11 +2007,11 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
         filepath = os.path.join(output_dir, filename)
 
         if os.path.exists(filepath):
-            logger.info(f"\nProcessing {filename}...")
+            logger.debug(f"Processing {filename}...")
             processed_any_himf = True
 
             try:
-                logger.info("Creating iteration plot...")
+                logger.debug("Creating iteration plot...")
                 fig = himf_processing_iteration(
                     filepath,
                     num_particles,
@@ -1827,7 +2022,7 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
                 )
                 outfile = os.path.join(output_dir, f'{os.path.splitext(filename)[0]}_all.png')
                 fig.savefig(outfile, dpi=300)
-                logger.info(f"Saved iteration plot to {outfile}")
+                logger.info("  %s", os.path.basename(outfile))
                 plt.close(fig)
             except Exception as e:
                 logger.error(f"Error creating iteration plot: {str(e)}")
@@ -1841,11 +2036,11 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
         filepath = os.path.join(output_dir, filename)
 
         if os.path.exists(filepath):
-            logger.info(f"\nProcessing {filename}...")
+            logger.debug(f"Processing {filename}...")
             processed_any_h2mf = True
 
             try:
-                logger.info("Creating iteration plot...")
+                logger.debug("Creating iteration plot...")
                 fig = h2mf_processing_iteration(
                     filepath,
                     num_particles,
@@ -1856,7 +2051,7 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
                 )
                 outfile = os.path.join(output_dir, f'{os.path.splitext(filename)[0]}_all.png')
                 fig.savefig(outfile, dpi=300)
-                logger.info(f"Saved iteration plot to {outfile}")
+                logger.info("  %s", os.path.basename(outfile))
                 plt.close(fig)
             except Exception as e:
                 logger.error(f"Error creating iteration plot: {str(e)}")
@@ -1870,11 +2065,11 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
         filepath = os.path.join(output_dir, filename)
 
         if os.path.exists(filepath):
-            logger.info(f"\nProcessing {filename}...")
+            logger.debug(f"Processing {filename}...")
             processed_any_mzr = True
 
             try:
-                logger.info("Creating iteration plot...")
+                logger.debug("Creating iteration plot...")
                 fig = mzr_processing_iteration(
                     filepath,
                     num_particles,
@@ -1885,7 +2080,7 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
                 )
                 outfile = os.path.join(output_dir, f'{os.path.splitext(filename)[0]}_all.png')
                 fig.savefig(outfile, dpi=300)
-                logger.info(f"Saved iteration plot to {outfile}")
+                logger.info("  %s", os.path.basename(outfile))
                 plt.close(fig)
             except Exception as e:
                 logger.error(f"Error creating iteration plot: {str(e)}")
@@ -1899,11 +2094,11 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
         filepath = os.path.join(output_dir, filename)
 
         if os.path.exists(filepath):
-            logger.info(f"\nProcessing {filename}...")
+            logger.debug(f"Processing {filename}...")
             processed_any_shmr = True
 
             try:
-                logger.info("Creating iteration plot...")
+                logger.debug("Creating iteration plot...")
                 fig = shmr_processing_iteration(
                     filepath,
                     num_particles,
@@ -1914,7 +2109,7 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
                 )
                 outfile = os.path.join(output_dir, f'{os.path.splitext(filename)[0]}_all.png')
                 fig.savefig(outfile, dpi=300)
-                logger.info(f"Saved iteration plot to {outfile}")
+                logger.info("  %s", os.path.basename(outfile))
                 plt.close(fig)
             except Exception as e:
                 logger.error(f"Error creating iteration plot: {str(e)}")
@@ -1928,11 +2123,11 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
         filepath = os.path.join(output_dir, filename)
 
         if os.path.exists(filepath):
-            logger.info(f"\nProcessing {filename}...")
+            logger.debug(f"Processing {filename}...")
             processed_any_smd = True
 
             try:
-                logger.info("Creating iteration plot...")
+                logger.debug("Creating iteration plot...")
                 fig = smd_processing_iteration(
                     filepath,
                     num_particles,
@@ -1943,7 +2138,7 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
                 )
                 outfile = os.path.join(output_dir, f'{os.path.splitext(filename)[0]}_all.png')
                 fig.savefig(outfile, dpi=300)
-                logger.info(f"Saved iteration plot to {outfile}")
+                logger.info("  %s", os.path.basename(outfile))
                 plt.close(fig)
             except Exception as e:
                 logger.error(f"Error creating iteration plot: {str(e)}")
@@ -1951,17 +2146,91 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
     if not processed_any_smd:
         logger.debug("Warning: No SMD files were found to process!")
 
+    # Process FICS files
+    processed_any_fics = False
+    for filename, (obs_data, sage_data) in fics_files.items():
+        filepath = os.path.join(output_dir, filename)
+
+        if os.path.exists(filepath):
+            logger.debug(f"Processing {filename}...")
+            processed_any_fics = True
+
+            try:
+                logger.debug("Creating iteration plot...")
+                fig = fics_processing_iteration(
+                    filepath,
+                    num_particles,
+                    num_iterations,
+                    obs_data,
+                    sage_data,
+                    tracks_dir
+                )
+                outfile = os.path.join(output_dir, f'{os.path.splitext(filename)[0]}_all.png')
+                fig.savefig(outfile, dpi=300)
+                logger.info("  %s", os.path.basename(outfile))
+                plt.close(fig)
+            except Exception as e:
+                logger.error(f"Error creating iteration plot: {str(e)}")
+
+    if not processed_any_fics:
+        logger.debug("Warning: No FICS files were found to process!")
+
+    # Process FICS_Mvir files
+    processed_any_fics_mvir = False
+    for filename, (obs_data, sage_data) in fics_mvir_files.items():
+        filepath = os.path.join(output_dir, filename)
+
+        if os.path.exists(filepath):
+            logger.debug(f"Processing {filename}...")
+            processed_any_fics_mvir = True
+
+            try:
+                logger.debug("Creating iteration plot...")
+                fig = fics_mvir_processing_iteration(
+                    filepath,
+                    num_particles,
+                    num_iterations,
+                    obs_data,
+                    sage_data,
+                    tracks_dir
+                )
+                outfile = os.path.join(output_dir, f'{os.path.splitext(filename)[0]}_all.png')
+                fig.savefig(outfile, dpi=300)
+                logger.info("  %s", os.path.basename(outfile))
+                plt.close(fig)
+            except Exception as e:
+                logger.error(f"Error creating iteration plot: {str(e)}")
+
+    if not processed_any_fics_mvir:
+        logger.debug("Warning: No FICS_Mvir files were found to process!")
+
+    # Process MLF files
+    for filename, (obs_data, sage_data) in mlf_files.items():
+        filepath = os.path.join(output_dir, filename)
+        if os.path.exists(filepath):
+            try:
+                fig = mlf_processing_iteration(filepath, num_particles,
+                                               num_iterations, obs_data,
+                                               sage_data, tracks_dir)
+                outfile = os.path.join(output_dir,
+                                       f'{os.path.splitext(filename)[0]}_all.png')
+                fig.savefig(outfile, dpi=300)
+                logger.info("  %s", os.path.basename(outfile))
+                plt.close(fig)
+            except Exception as e:
+                logger.error(f"Error creating MLF iteration plot: {e}")
+
     # Process CSFRDH files
     processed_any_csfrdh = False
     for filename, (obs_data, sage_data) in csfrdh_files.items():
         filepath = os.path.join(output_dir, filename)
 
         if os.path.exists(filepath):
-            logger.info(f"\nProcessing {filename}...")
+            logger.debug(f"Processing {filename}...")
             processed_any_csfrdh = True
 
             try:
-                logger.info("Creating iteration plot...")
+                logger.debug("Creating iteration plot...")
                 fig = csfrdh_processing_iteration(
                     filepath,
                     num_particles,
@@ -1972,7 +2241,7 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
                 )
                 outfile = os.path.join(output_dir, f'{os.path.splitext(filename)[0]}_all.png')
                 fig.savefig(outfile, dpi=300)
-                logger.info(f"Saved iteration plot to {outfile}")
+                logger.info("  %s", os.path.basename(outfile))
                 plt.close(fig)
             except Exception as e:
                 logger.error(f"Error creating iteration plot: {str(e)}")
@@ -1981,7 +2250,7 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
         logger.debug("Warning: No CSFRDH files were found to process!")
 
     # Load parameter values
-    logger.info("Processing parameter evolution...")
+    logger.debug("Processing parameter evolution...")
     param_names = ['SFR efficiency', 'Reheating epsilon', 'Ejection efficiency', 'Reincorporation efficiency',
                    'Radio Mode', 'Quasar Mode', 'Black Hole growth', 'Baryon Fraction']
     
@@ -2016,7 +2285,7 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
             logger.debug(f"No parameter file found for z={z}")
 
     if not processed_redshifts:
-        logger.warning("No parameter files found!")
+        logger.debug("No per-redshift parameter files found (only produced by the multi-redshift workflow); skipping that plot.")
         return
 
     processed_redshifts.sort()
@@ -2056,7 +2325,7 @@ def processing(tracks_dir, space_file, output_dir, config_opts, space=None):
         
         logger.info("All plots have been saved to: %s", output_dir)
     else:
-        logger.info("No parameter files found for visualization!")
+        logger.debug("No per-redshift parameter files for visualisation; skipping.")
     print(particle_data, best_params, best_scores)
     return particle_data, best_params, best_scores
 
@@ -2114,3 +2383,439 @@ if __name__ == '__main__':
     main(opts.tracks_dir, opts.space_file, opts.output_dir, config_opts, space=space_obj)
 
     main(opts.tracks_dir, opts.space_file, opts.output_dir)
+
+# =============================================================================
+# PSO health and constraint diagnostics
+#
+# The plots above show one constraint's curves per figure.  These show the
+# optimisation itself: whether it converged, which constraint is driving the
+# objective, which parameters the data actually constrains, and where the model
+# is systematically off.  Every score here is recomputed from the dump files
+# with a chosen stat test, so chi2 and student-t are interchangeable without
+# rerunning anything.
+# =============================================================================
+
+def read_dump_blocks(filepath):
+    """Parse a <Constraint>_dump.txt into per-evaluation blocks.
+
+    Returns a list of (x_obs, y_obs, y_mod, err) tuples, one per particle
+    evaluation, in the order written.  Dumps written before err was added have
+    three columns; those come back with err = None.
+    """
+    blocks, cur = [], []
+    with open(filepath) as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith('# New Data Block'):
+                if cur:
+                    blocks.append(cur)
+                cur = []
+            elif line:
+                try:
+                    cur.append([float(v) for v in line.split('\t')])
+                except ValueError:
+                    continue
+    if cur:
+        blocks.append(cur)
+
+    out = []
+    for b in blocks:
+        arr = np.array(b, dtype=float)
+        if arr.ndim != 2 or arr.shape[0] == 0:
+            continue
+        err = arr[:, 3] if arr.shape[1] > 3 else None
+        out.append((arr[:, 0], arr[:, 1], arr[:, 2], err))
+    return out
+
+
+# One-shot flag so the count-scale notice is said once per run, not once per
+# constraint per figure.
+_COUNT_SCALE_NOTICE = []
+
+
+def score_dump_blocks(blocks, stat_test='chi2', reduced=True):
+    """Score each evaluation block with the named stat test.
+
+    stat_test is a key of analysis.stat_tests ('chi2' or 'student-t'), so the
+    same dumps can be re-scored either way after the fact.  Blocks with no
+    recorded err fall back to the scatter of the observations, which is what
+    studentT does internally for zero errors.
+    """
+    from src import analysis
+    fn = analysis.stat_tests[stat_test]
+
+    # A counting statistic needs the constraint's dm * V, which the dump does
+    # not record (it stores log10(phi), not counts).  Score with chi2 instead:
+    # these scores only rank particles so the plots can pick the best one, and
+    # chi2 ranks them faithfully enough for that.  Noted rather than silent,
+    # because the number shown on a residual panel is then a chi2.
+    if getattr(fn, 'needs_count_scale', False):
+        if not _COUNT_SCALE_NOTICE:
+            _COUNT_SCALE_NOTICE.append(True)
+            logger.info('  (dump files record log10(phi), not counts, so the '
+                        'diagnostic panels rank particles by chi2 rather '
+                        'than %s)', stat_test)
+        fn = analysis.stat_tests['chi2']
+        stat_test = 'chi2'
+
+    scores = []
+    for x_obs, y_obs, y_mod, err in blocks:
+        e = err if err is not None else np.full_like(y_obs, max(np.std(y_obs), 1e-3))
+        try:
+            s = float(fn(y_obs, y_mod, e))
+        except Exception:
+            s = np.nan
+        scores.append(s / len(y_obs) if reduced and len(y_obs) else s)
+    return np.array(scores)
+
+
+def _dump_files(output_dir):
+    """Constraint name -> dump path for every dump in an output directory."""
+    found = {}
+    for path in sorted(glob.glob(os.path.join(output_dir, '*_dump.txt'))):
+        name = os.path.basename(path)[:-len('_dump.txt')]
+        found[name] = path
+    return found
+
+
+def _reshape_by_iteration(values, num_particles):
+    """(n_iterations, num_particles) view of a flat per-evaluation series."""
+    values = np.asarray(values, dtype=float)
+    n_iter = len(values) // num_particles
+    if n_iter < 1:
+        return values.reshape(1, -1)
+    return values[:n_iter * num_particles].reshape(n_iter, num_particles)
+
+
+# --- 1. convergence trace ----------------------------------------------------
+
+def plot_convergence(tracks_dir, ax=None):
+    """Best-so-far and per-iteration best/median/worst objective vs iteration.
+
+    Answers the first question about any optimisation: did it converge, or did
+    it run out of iterations still descending?  A best-so-far curve that is
+    still dropping at the last iteration means the run was cut short.
+    """
+    files = sorted(glob.glob(os.path.join(tracks_dir, 'track_*_fx.npy')))
+    if not files:
+        return None
+    fx = [np.load(f) for f in files]
+
+    it = np.arange(len(fx))
+    best = np.array([np.nanmin(v) for v in fx])
+    med = np.array([np.nanmedian(v) for v in fx])
+    worst = np.array([np.nanmax(v) for v in fx])
+    best_so_far = np.minimum.accumulate(best)
+
+    own_fig = ax is None
+    if own_fig:
+        fig, ax = plt.subplots(figsize=(8, 5))
+    ax.fill_between(it, best, worst, color='steelblue', alpha=0.18,
+                    label='swarm range')
+    ax.plot(it, med, color='steelblue', lw=1.5, label='swarm median')
+    ax.plot(it, best, color='darkorange', lw=1.5, label='iteration best')
+    ax.plot(it, best_so_far, color='crimson', lw=2.5, label='best so far')
+    ax.set_xlabel('iteration')
+    ax.set_ylabel('objective')
+    ax.set_yscale('log' if np.all(best_so_far > 0) else 'linear')
+    ax.grid(alpha=0.25)
+    leg = ax.legend(fontsize=9); leg.draw_frame(False)
+
+    # Flag a run that never flattened
+    if len(best_so_far) > 3:
+        tail = best_so_far[-max(3, len(best_so_far) // 4):]
+        if tail[0] > 0 and (tail[0] - tail[-1]) / tail[0] > 0.02:
+            ax.set_title('still improving at the last iteration -- '
+                         'consider more iterations', fontsize=10, color='firebrick')
+        else:
+            ax.set_title('converged', fontsize=10, color='darkgreen')
+    return ax.figure if own_fig else ax
+
+
+# --- 2. per-constraint breakdown ---------------------------------------------
+
+def plot_constraint_breakdown(output_dir, num_particles, stat_test='chi2', ax=None):
+    """Each constraint's reduced score vs iteration, recomputed from the dumps.
+
+    Shows which constraint is actually driving the objective and which is
+    already satisfied -- the thing a single total score hides.  Because the
+    dumps carry err, the same run can be re-scored with student-t by passing
+    stat_test='student-t'.
+    """
+    dumps = _dump_files(output_dir)
+    if not dumps:
+        return None
+
+    own_fig = ax is None
+    if own_fig:
+        fig, ax = plt.subplots(figsize=(9, 5.5))
+
+    colours = plt.cm.tab10(np.linspace(0, 1, max(len(dumps), 2)))
+    plotted = 0
+    for (name, path), colour in zip(sorted(dumps.items()), colours):
+        blocks = read_dump_blocks(path)
+        if not blocks:
+            continue
+        scores = score_dump_blocks(blocks, stat_test=stat_test)
+        per_iter = _reshape_by_iteration(scores, num_particles)
+        best = np.nanmin(per_iter, axis=1)
+        ax.plot(np.arange(len(best)), best, lw=2, color=colour,
+                label='%s (n=%d pts)' % (name, len(blocks[0][0])))
+        plotted += 1
+
+    if not plotted:
+        if own_fig:
+            plt.close(fig)
+        return None
+
+    ax.set_xlabel('iteration')
+    ax.set_ylabel('reduced %s of the iteration-best particle'
+                  % ('chi$^2$' if stat_test == 'chi2' else 'student-t'))
+    ax.set_yscale('log')
+    ax.grid(alpha=0.25)
+    leg = ax.legend(fontsize=8, ncol=2); leg.draw_frame(False)
+    ax.set_title('which constraint is driving the fit', fontsize=10)
+    return ax.figure if own_fig else ax
+
+
+# --- 3. parameter traces / swarm collapse ------------------------------------
+
+def plot_parameter_traces(space, pos, fx, ax=None):
+    """Swarm spread per parameter vs iteration, normalised to its bounds.
+
+    A parameter whose swarm collapses to a narrow band is constrained by the
+    data; one still spanning the full range at the last iteration is not, and
+    its best-fit value should not be quoted as a measurement.
+    """
+    labels = [str(l) for l in space['plot_label']]
+    is_log = space['is_log'].astype(bool)
+    lb = np.where(is_log, np.log10(space['lb']), space['lb'])
+    ub = np.where(is_log, np.log10(space['ub']), space['ub'])
+
+    # pos is (D, S, L): dimensions, particles, iterations
+    D, S, L = pos.shape
+    own_fig = ax is None
+    if own_fig:
+        fig, ax = plt.subplots(figsize=(9, 5.5))
+
+    colours = plt.cm.viridis(np.linspace(0, 0.9, D))
+    for d in range(D):
+        vals = pos[d]
+        if is_log[d]:
+            with np.errstate(divide='ignore'):
+                vals = np.log10(np.where(vals > 0, vals, np.nan))
+        frac = (vals - lb[d]) / max(ub[d] - lb[d], 1e-30)
+        spread = np.nanpercentile(frac, 84, axis=0) - np.nanpercentile(frac, 16, axis=0)
+        ax.plot(np.arange(L), spread, lw=2, color=colours[d], label=labels[d])
+
+    ax.axhline(0.1, ls='dotted', c='0.4', lw=1)
+    ax.text(0.01, 0.105, 'collapsed (< 10% of range)', fontsize=8, color='0.4',
+            transform=ax.get_yaxis_transform())
+    ax.set_xlabel('iteration')
+    ax.set_ylabel('swarm 16-84 spread / bound range')
+    ax.set_ylim(0, 1.02)
+    ax.grid(alpha=0.25)
+    leg = ax.legend(fontsize=8, ncol=2); leg.draw_frame(False)
+    ax.set_title('which parameters the data constrains', fontsize=10)
+    return ax.figure if own_fig else ax
+
+
+# --- 4. bound contact --------------------------------------------------------
+
+def plot_bound_contact(space, pos, ax=None):
+    """Fraction of particle-iterations spent within 1% of each bound.
+
+    A best fit pinned against a bound is not a fit, it is a bound: the optimum
+    lies outside the search space and the range needs widening.  Persistent
+    contact also wastes evaluations, since PSO clamps position but not velocity.
+    """
+    labels = [str(l) for l in space['plot_label']]
+    is_log = space['is_log'].astype(bool)
+    lb = np.where(is_log, np.log10(space['lb']), space['lb'])
+    ub = np.where(is_log, np.log10(space['ub']), space['ub'])
+
+    D = pos.shape[0]
+    at_lb, at_ub = np.zeros(D), np.zeros(D)
+    for d in range(D):
+        vals = pos[d].ravel()
+        if is_log[d]:
+            with np.errstate(divide='ignore'):
+                vals = np.log10(np.where(vals > 0, vals, np.nan))
+        rng = max(ub[d] - lb[d], 1e-30)
+        tol = 0.01 * rng
+        finite = np.isfinite(vals)
+        n = max(np.count_nonzero(finite), 1)
+        at_lb[d] = np.count_nonzero(vals[finite] <= lb[d] + tol) / n
+        at_ub[d] = np.count_nonzero(vals[finite] >= ub[d] - tol) / n
+
+    own_fig = ax is None
+    if own_fig:
+        fig, ax = plt.subplots(figsize=(9, 4.5))
+    y = np.arange(D)
+    ax.barh(y - 0.2, at_lb, height=0.38, color='steelblue', label='at lower bound')
+    ax.barh(y + 0.2, at_ub, height=0.38, color='indianred', label='at upper bound')
+    ax.set_yticks(y); ax.set_yticklabels(labels, fontsize=8)
+    ax.set_xlabel('fraction of particle-iterations within 1% of the bound')
+    ax.axvline(0.2, ls='dotted', c='0.4', lw=1)
+    ax.grid(alpha=0.25, axis='x')
+    leg = ax.legend(fontsize=8); leg.draw_frame(False)
+    flagged = [labels[d] for d in range(D) if max(at_lb[d], at_ub[d]) > 0.2]
+    ax.set_title('bounds to reconsider: %s' % (', '.join(flagged) if flagged else 'none'),
+                 fontsize=10, color='firebrick' if flagged else 'darkgreen')
+    return ax.figure if own_fig else ax
+
+
+# --- 5. degeneracy, coloured by score ----------------------------------------
+
+def plot_degeneracy(space, pos, fx, output_path, max_params=6):
+    """Parameter-pair scatter coloured by objective, to expose degeneracies.
+
+    The existing corner plot shows where particles went, which is density; this
+    shows how good they were.  A degenerate direction appears as an elongated
+    low-score valley -- two parameters trading off, only their combination
+    constrained.
+    """
+    labels = [str(l) for l in space['plot_label']]
+    D = min(pos.shape[0], max_params)
+    if D < 2:
+        return None
+
+    flat = [pos[d].ravel() for d in range(D)]
+    score = np.asarray(fx).ravel()
+    n = min(len(score), min(len(v) for v in flat))
+    flat = [v[:n] for v in flat]
+    score = score[:n]
+    ok = np.isfinite(score) & (score > 0)
+    if np.count_nonzero(ok) < 10:
+        return None
+    c = np.log10(score[ok])
+
+    fig, axes = plt.subplots(D - 1, D - 1, figsize=(2.5 * (D - 1), 2.5 * (D - 1)),
+                             squeeze=False)
+    sc = None
+    for i in range(D - 1):
+        for j in range(D - 1):
+            ax = axes[i][j]
+            if j > i:
+                ax.axis('off')
+                continue
+            xi, yi = j, i + 1
+            sc = ax.scatter(flat[xi][ok], flat[yi][ok], c=c, s=6,
+                            cmap='viridis_r', alpha=0.65, linewidths=0)
+            # mark the best particle
+            b = np.argmin(score[ok])
+            ax.plot(flat[xi][ok][b], flat[yi][ok][b], marker='*', ms=14,
+                    color='crimson', mec='k', mew=0.5)
+            if i == D - 2:
+                ax.set_xlabel(labels[xi], fontsize=8)
+            else:
+                ax.set_xticklabels([])
+            if j == 0:
+                ax.set_ylabel(labels[yi], fontsize=8)
+            else:
+                ax.set_yticklabels([])
+            ax.tick_params(labelsize=7)
+
+    if sc is not None:
+        cbar = fig.colorbar(sc, ax=axes, fraction=0.025, pad=0.02)
+        cbar.set_label(r'$\log_{10}$ objective  (dark = better)', fontsize=9)
+    fig.suptitle('parameter degeneracies, coloured by fit quality; star = best',
+                 fontsize=11)
+    fig.savefig(output_path, dpi=200, bbox_inches='tight')
+    plt.close(fig)
+    return output_path
+
+
+# --- 6. residual panels ------------------------------------------------------
+
+def plot_residuals(output_dir, num_particles, output_path, stat_test='chi2'):
+    """Normalised residuals of the best particle, one panel per constraint.
+
+    (model - obs)/sigma against the constraint's own x axis.  A systematic
+    trend -- all high at one end, all low at the other -- is a shape error the
+    optimiser cannot fix by rescaling, and is far easier to see here than in a
+    log-log overlay of the curves themselves.
+    """
+    dumps = _dump_files(output_dir)
+    usable = {}
+    for name, path in sorted(dumps.items()):
+        blocks = read_dump_blocks(path)
+        if blocks and blocks[0][3] is not None:
+            usable[name] = blocks
+    if not usable:
+        return None
+
+    n = len(usable)
+    ncol = min(3, n)
+    nrow = int(np.ceil(n / ncol))
+    fig, axes = plt.subplots(nrow, ncol, figsize=(4.2 * ncol, 3.2 * nrow),
+                             squeeze=False)
+
+    from src import analysis as _a
+    if getattr(_a.stat_tests.get(stat_test), 'needs_count_scale', False):
+        stat_test = 'chi2'      # see score_dump_blocks
+
+    for k, (name, blocks) in enumerate(usable.items()):
+        ax = axes[k // ncol][k % ncol]
+        scores = score_dump_blocks(blocks, stat_test=stat_test)
+        best = int(np.nanargmin(scores))
+        x_obs, y_obs, y_mod, err = blocks[best]
+        resid = (y_mod - y_obs) / np.maximum(err, 1e-12)
+
+        ax.axhline(0, c='k', lw=1)
+        ax.axhspan(-1, 1, color='0.85', zorder=0)
+        ax.axhspan(-2, 2, color='0.93', zorder=-1)
+        ax.plot(x_obs, resid, 'o-', ms=4, lw=1.2, color='crimson')
+        ax.set_title('%s   (reduced %s = %.2f)'
+                     % (name, stat_test, scores[best]), fontsize=9)
+        ax.set_ylabel(r'$(\mathrm{model}-\mathrm{obs})/\sigma$', fontsize=8)
+        ax.tick_params(labelsize=7)
+        ax.grid(alpha=0.2)
+        lim = max(3.0, float(np.nanmax(np.abs(resid))) * 1.1)
+        ax.set_ylim(-lim, lim)
+
+    for k in range(n, nrow * ncol):
+        axes[k // ncol][k % ncol].axis('off')
+
+    fig.suptitle('normalised residuals of the best-fit particle '
+                 '(grey bands: 1 and 2 sigma)', fontsize=11)
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
+    fig.savefig(output_path, dpi=200, bbox_inches='tight')
+    plt.close(fig)
+    return output_path
+
+
+# --- combined PSO health figure ---------------------------------------------
+
+def create_pso_health_figure(space, pos, fx, tracks_dir, output_dir,
+                             num_particles, output_path, stat_test='chi2'):
+    """Convergence, per-constraint breakdown, parameter collapse and bound
+    contact in one figure -- the four things worth checking after every run."""
+    fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+
+    try:
+        plot_convergence(tracks_dir, ax=axes[0][0])
+    except Exception as e:
+        axes[0][0].text(0.5, 0.5, 'convergence: %s' % e, ha='center', fontsize=8)
+    try:
+        if plot_constraint_breakdown(output_dir, num_particles,
+                                     stat_test=stat_test, ax=axes[0][1]) is None:
+            axes[0][1].text(0.5, 0.5, 'no constraint dumps found',
+                            ha='center', fontsize=9)
+            axes[0][1].axis('off')
+    except Exception as e:
+        axes[0][1].text(0.5, 0.5, 'breakdown: %s' % e, ha='center', fontsize=8)
+    try:
+        plot_parameter_traces(space, pos, fx, ax=axes[1][0])
+    except Exception as e:
+        axes[1][0].text(0.5, 0.5, 'traces: %s' % e, ha='center', fontsize=8)
+    try:
+        plot_bound_contact(space, pos, ax=axes[1][1])
+    except Exception as e:
+        axes[1][1].text(0.5, 0.5, 'bounds: %s' % e, ha='center', fontsize=8)
+
+    fig.suptitle('PSO health  (scored with %s)' % stat_test, fontsize=13)
+    fig.tight_layout(rect=(0, 0, 1, 0.97))
+    fig.savefig(output_path, dpi=200, bbox_inches='tight')
+    plt.close(fig)
+    return output_path

@@ -55,9 +55,124 @@ def _exec_sage(msg, cmdline, cwd=None):
                      common.b2s(out), common.b2s(err))
         raise RuntimeError('%s error' % cmdline[0])
 
-def _to_physical(value, is_log):
-    """Convert a PSO particle value back to physical space."""
+def _to_physical(value, is_log, is_int=False, lb=None, ub=None):
+    """Convert a PSO particle value back to physical space.
+
+    An integer switch is rounded to the nearest level and clamped to its
+    declared bounds.  The clamp matters: SAGE validates switches against a
+    fixed allowed range and aborts the whole run on an out-of-range value, so a
+    particle that drifts past the half-step margin must not be passed through.
+    """
+    if is_int:
+        value = int(np.rint(value))
+        if lb is not None:
+            value = max(value, int(np.rint(lb)))
+        if ub is not None:
+            value = min(value, int(np.rint(ub)))
+        return value
     return 10.0 ** value if is_log else value
+
+
+def _format_physical(value, is_int):
+    """Render a physical parameter value for a SAGE parameter file.
+
+    Switches must be written without a decimal point: SAGE reads them with
+    strtol and rejects the value outright if any character is left over, so
+    '2.0' aborts the run where '2' is fine.
+    """
+    return '%d' % value if is_int else '%.6g' % value
+
+
+def _particle_physical(space, particle, p):
+    """Physical value and formatted string for parameter `p` of a particle."""
+    phys = _to_physical(particle[p], space['is_log'][p],
+                        is_int=bool(space['is_int'][p]),
+                        lb=space['lb'][p], ub=space['ub'][p])
+    return phys, _format_physical(phys, bool(space['is_int'][p]))
+
+def _config_tag(line):
+    """The parameter tag a SAGE parameter-file line defines, or '' if none.
+
+    The tag is the first whitespace-delimited token.  Commented-out lines begin
+    with '%', so their token differs from the bare parameter name and they
+    correctly do not count as defining it.
+    """
+    parts = line.split()
+    return parts[0] if parts else ''
+
+
+def config_tags(config_path):
+    """Set of parameter tags defined in a SAGE parameter file."""
+    with open(config_path) as f:
+        return {tag for tag in (_config_tag(line) for line in f) if tag}
+
+
+def missing_from_config(space, config_path):
+    """Space parameters that do not appear in the SAGE parameter file.
+
+    write_particle_par substitutes values into lines that already exist and
+    never appends, so a parameter absent from the base .par is silently
+    discarded: every particle then runs identical physics, the objective is
+    flat, and the swarm reports the same best fit for the whole run.  Callers
+    should refuse to start rather than burn hours on that.
+
+    Uses the same tag rule as the writer, so this cannot disagree with what the
+    writer will actually do.
+    """
+    tags = config_tags(config_path)
+    return [name for name in space['name'] if name not in tags]
+
+
+def write_particle_par(config_path, out_path, output_dir, space, particle):
+    """Write the SAGE parameter file for one particle.
+
+    Substitutes this particle's value for every search-space parameter and
+    points OutputDir at `output_dir`.
+
+    Replaces three hand-copied loops that shared two defects:
+
+      * They stopped scanning as soon as they had made as many substitutions as
+        there are search parameters.  A search parameter positioned before
+        OutputDir in the file therefore left OutputDir unrewritten, and every
+        particle wrote its output into the same directory.  The same early exit
+        could also fire before all parameters were substituted, because the
+        counter counted substitutions rather than distinct parameters.
+
+      * They matched the parameter tag by prefix.  SAGE has one parameter whose
+        name is a prefix of another (Omega / OmegaLambda), so searching over the
+        shorter name would also overwrite the longer one's line.
+
+    This scans the whole file and matches tags exactly.  The file is a hundred
+    or so lines, so there is nothing to gain from stopping early.
+    """
+    with open(config_path) as f:
+        lines = f.readlines()
+
+    index_of = {name: p for p, name in enumerate(space['name'])}
+    substituted = set()
+
+    for l, line in enumerate(lines):
+        tag = _config_tag(line)
+        if tag == 'OutputDir':
+            lines[l] = f'OutputDir              {output_dir}\n'
+        elif tag in index_of:
+            _, phys_str = _particle_physical(space, particle, index_of[tag])
+            lines[l] = f'{tag}          {phys_str}\n'
+            substituted.add(tag)
+
+    with open(out_path, 'w') as f:
+        f.writelines(lines)
+
+    # main.py checks this up front, but the config could change under a long
+    # run; a silently dropped parameter flattens the objective, so say so.
+    dropped = set(index_of) - substituted
+    if dropped:
+        logger.warning(
+            'parameters absent from %s, so these particle values were '
+            'discarded: %s', config_path, ', '.join(sorted(dropped)))
+
+    return substituted
+
 
 def _print_progress(done, total, iteration):
     bar_width = 30
@@ -66,9 +181,35 @@ def _print_progress(done, total, iteration):
     sys.stdout.write(f'\r  Iteration {iteration + 1}  [{bar}]  {done}/{total} particles complete  ')
     sys.stdout.flush()
 
+_warned_no_counts = set()
+
+
 def _evaluate(constraint, stat_test, modeldir, subvols):
     y_obs, y_mod, err = constraint.get_data(modeldir, subvols)
-    score = stat_test(y_obs, y_mod, err)
+
+    # A counting statistic (cash) needs the constraint's dm * V so it can
+    # recover object counts from log10(phi).  Constraints that are not
+    # histograms -- the black hole-bulge relation, the MZR, the ICS fractions,
+    # the mass loading -- have no counts, so Poisson is undefined for them and
+    # they fall back to chi2.  Said once per constraint rather than per
+    # particle, or it would be thousands of lines.
+    if getattr(stat_test, 'needs_count_scale', False):
+        scale = getattr(constraint, 'count_scale', None)
+        if scale is None:
+            name = type(constraint).__name__
+            if name not in _warned_no_counts:
+                _warned_no_counts.add(name)
+                logger.warning(
+                    '%s is not a counting statistic (no bin width), so the '
+                    'Poisson/Cash test is undefined for it; scoring it with '
+                    'chi2 instead. The counting constraints in this run still '
+                    'use Cash.', name)
+            from src import analysis as _analysis
+            score = _analysis.chi2(y_obs, y_mod, err)
+        else:
+            score = stat_test(y_obs, y_mod, err, count_scale=scale)
+    else:
+        score = stat_test(y_obs, y_mod, err)
     n = len(y_obs)
     if n == 0:
         # Previously this returned the raw score of empty arrays, i.e. 0.0, so a
@@ -116,22 +257,8 @@ def run_sage_hpc(particles, *args):
             temp_filename = os.path.join(opts.outdir, f'{opts.config[slash+1:-4]}_{count}_{i}_temp.par')
             
             # Modify parameter file with JOBFS path
-            with open(opts.config) as f:
-                lines = f.readlines()
-                
-            with open(temp_filename, 'w') as s:
-                Ndone = 0
-                for l, line in enumerate(lines):
-                    if line[:9] == 'OutputDir':
-                        lines[l] = f'OutputDir              {work_dir}\n'
-                    for p, name in enumerate(space['name']):
-                        if line[:len(name)] == name:
-                            phys = _to_physical(particle[p], space['is_log'][p])
-                            lines[l] = f'{name}          {phys:.6g}\n'
-                            Ndone += 1
-                    if Ndone == len(space['name']):
-                        break
-                s.writelines(lines)
+            write_particle_par(opts.config, temp_filename, work_dir,
+                               space, particle)
 
             logger.info(f'Submitting SAGE SLURM job for: {temp_filename}')
 
@@ -214,22 +341,8 @@ def run_sage_hpc(particles, *args):
             temp_filename = os.path.join(opts.outdir, f'{opts.config[slash+1:-4]}_{count}_{i}_temp.par')
             
             # Modify parameter file
-            with open(opts.config) as f:
-                lines = f.readlines()
-                
-            with open(temp_filename, 'w') as s:
-                Ndone = 0
-                for l, line in enumerate(lines):
-                    if line[:9] == 'OutputDir':
-                        lines[l] = f'OutputDir              {particle_dir}\n'
-                    for p, name in enumerate(space['name']):
-                        if line[:len(name)] == name:
-                            phys = _to_physical(particle[p], space['is_log'][p])
-                            lines[l] = f'{name}          {phys:.6g}\n'
-                            Ndone += 1
-                    if Ndone == len(space['name']):
-                        break
-                s.writelines(lines)
+            write_particle_par(opts.config, temp_filename, particle_dir,
+                               space, particle)
 
             # Launch SAGE with MPI for each particle
             cmdline = [
@@ -329,29 +442,25 @@ def run_sage(particle, *args):
     # temp_filename = 'output/' + opts.config[slash+1:-4] + '_' + spid + '_temp.par'  # Example local temp file
     temp_filename = os.path.join(opts.outdir, opts.config[slash+1:-4] + '_' + spid + '_temp.par')
     #
-    f = open(opts.config).readlines()
-    s = open(temp_filename, 'w')
-    #
-    Np = len(space['name'])
-    Ndone = 0
-    for l, line in enumerate(f):
-        if line[:9] == 'OutputDir': f[l] = 'OutputDir              '+modeldir+'\n'
-        for p in range(Np):
-            if line[:len(space['name'][p])] == space['name'][p]:
-                phys = _to_physical(particle[p], space['is_log'][p])
-                f[l] = space['name'][p]+'          '+f'{phys:.6g}'+'\n'
-                Ndone += 1
-        if Ndone==Np: break
-    #
-    s.writelines(f)
-    s.close()
+    write_particle_par(opts.config, temp_filename, modeldir, space, particle)
 
 #    cmdline = ['mpirun', '-np', '8', opts.sage_binary, temp_filename]
     cmdline = [opts.sage_binary, temp_filename]
     _exec_sage('Running SAGE instance', cmdline, cwd=os.path.dirname(opts.sage_binary))
 
-    # Simple weighted sum of constraint scores (fixed from exponential transformation)
-    total = sum(_evaluate(c, statTest, modeldir, subvols) * c.rel_weight for c in opts.constraints)
+    # Weighted mean of per-constraint reduced scores.  _evaluate divides each
+    # constraint's score by its number of data points, so a constraint with 32
+    # points and one with 7 get equal say once rel_weight is applied; the total
+    # therefore sits between the per-constraint reduced values and is nowhere
+    # near a sum of raw chi2 values.
+    scores = {c: _evaluate(c, statTest, modeldir, subvols) for c in opts.constraints}
+    total = sum(scores[c] * c.rel_weight for c in opts.constraints)
+    # Same breakdown the SLURM path logs, so the contribution of each
+    # constraint is visible in whichever path is running.
+    score_parts = '  '.join(
+        f'{c.__class__.__name__}={scores[c]:.3f}*{c.rel_weight:.2f}'
+        for c in opts.constraints)
+    logger.debug('Particle scores: %s  total=%.4f', score_parts, total)
     logger.debug('Particle %r evaluated to %f', particle, total)
 
     shutil.rmtree(modeldir)

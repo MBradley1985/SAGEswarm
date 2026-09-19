@@ -27,7 +27,7 @@ A Python package for PSO-based parameter optimization in galaxy evolution modeli
 ## Features
 
 - Particle Swarm Optimization (PSO) for SAGE parameter calibration
-- Multiple constraint types: SMF, BHMF, BHBM, CSFRDH, HIMF, H2MF, MZR, SHMR, SMD
+- Multiple constraint types: SMF, BHMF, BHBM, CSFRDH, HIMF, H2MF, MZR, SHMR, SMD, FICS, FICS_Mvir, MLF
 - Red/blue galaxy stellar mass function discrimination
 - Multi-simulation support: miniUchuu, miniMillennium, MTNG
 - Automatic CSV data generation from SAGE HDF5 output
@@ -154,6 +154,19 @@ SAGE-PSO/
 | `-s, --swarm-size` | `10 + 2*sqrt(D)` | Number of particles |
 | `-m, --max-iterations` | `20` | Maximum iterations |
 | `-S, --space-file` | `space.txt` | Search space specification |
+
+Box size, cosmology (`h0`, `Omega0`), the processed volume fraction and the
+scale-factor list are **read automatically** — the first three and the volume
+fraction from the SAGE output's `Header/Simulation` and `Header/Runtime`, the
+scale-factor list from the `.par` file's `FileWithSnapList` (falling back to the
+output header). `--boxsize`, `--h0`, `--Omega0`, `--vol-frac` and
+`--age-alist-file` remain as overrides, but a value that contradicts the SAGE
+output is refused rather than applied: a wrong box size rescales every
+volume-dependent constraint by (ratio)³, silently.
+
+`--sim` still has to be set. It selects the snapshot-to-redshift map, which the
+output does not record: `0` for the 50-snapshot Uchuu grid (miniUchuu and
+microUchuu both), `1` for the 64-snapshot Millennium grid, `2` for MTNG.
 | `-t, --stat-test` | `student-t` | Statistical test (`student-t`, `chi2`) |
 | `-x, --constraints` | `BHMF,SMF_z0,BHBM` | Constraints to use |
 | `-csv, --csv-output` | none | Save results to CSV |
@@ -205,9 +218,80 @@ QuasarModeEfficiency,eQuasar,1,0.001,0.5
 BlackHoleGrowthRate,eBHgrowth,1,0.0001,0.5
 ```
 
-**Format:** `ParameterName,Label,IsLog,LowerBound,UpperBound`
+**Format:** `ParameterName,Label,Sampling,LowerBound,UpperBound`
 
-- `IsLog`: 1 = logarithmic space, 0 = linear space
+- `Sampling`: `0` = linear, `1` = logarithmic, `2` = integer switch
+
+### Statistical tests (`-t`)
+
+| Test | Behaviour |
+|------|-----------|
+| `chi2` | Gaussian. Most sensitive when the errors are trustworthy; an outlier costs its distance squared. |
+| `student-t` | Heavy-tailed, degrees of freedom estimated from the residuals. Tends to `chi2` as the fit improves. |
+| `huber` | Quadratic within 2σ, linear beyond. Same as `chi2` for good points, no dof to estimate. |
+| `cauchy` | Heaviest tail (Student-t with ν=1). For when some observations are simply wrong. |
+| `abs` | Sum of \|residual\|/σ. The total reads as "typically N sigma out". |
+| `cash` | Poisson/Cash (1979) C statistic on galaxy **counts**, for the mass functions. Falls back to `chi2` for constraints that are not histograms. |
+
+`cash` treats the model as the Poisson realisation and the observation as the
+underlying rate — the right way round, since a survey covers far more volume
+than a mini-box, so the simulation is the noisy side. It needs the constraint's
+`bin_width` to recover counts from log₁₀φ, which the mass functions set and the
+relations (BHBM, MZR, SHMR, FICS, MLF) do not.
+
+**When to use `cash`:** it is the only test that handles sparse and empty bins
+correctly. At the massive end a bin holds 1–4 galaxies, where the 68% Poisson
+interval on log₁₀φ is wildly asymmetric (`[-3.0, +0.3]` dex for N=1) and no
+symmetric error bar represents it. **But** it weights every bin by its object
+count, so the well-populated low-mass end (10⁴ galaxies, φ known to 1%)
+dominates — and there the real uncertainty is systematic (completeness, IMF,
+apertures), not shot noise. Note the model's Poisson error is *already* folded
+into `chi2` via `hist_smf_err`; what `chi2` gets wrong is only the asymmetry at
+N < 5 and the empty-bin sentinel. Prefer `cash` when the massive end is what
+you care about, and do not mix it with non-counting constraints in one run
+without rebalancing weights — the mass functions will otherwise outweigh them
+by a factor of ~100.
+
+All are reduced by the point count per constraint, then combined by relative
+weight, so they are comparable within a fixed `-x` string but not across
+different ones.
+
+### Integer switches
+
+SAGE reads some parameters as integers — mode selectors such as
+`DynamicDisruptionSplit`, `ConcentrationOn`, `FeedbackFreeModeOn`,
+`SFprescription`. Its parameter reader parses these with `strtol` and **aborts
+the whole run** if anything is left over, so a continuous PSO value like `1.37`
+kills the optimisation rather than just scoring badly.
+
+Sampling code `2` makes such a parameter safe to optimise: the particle position
+stays continuous, but the value is rounded to the nearest level and clamped to
+the declared bounds before it is written to the parameter file, and the tracks,
+CSV and best-fit report the level that SAGE actually ran.
+
+```
+DynamicDisruptionSplit,split,2,0,2
+ConcentrationOn,cOn,2,0,3
+SfrEfficiency,aSF,1,0.005,0.2
+```
+
+Bounds for a switch must be whole numbers, and must lie inside the range SAGE
+accepts for that parameter (SAGE validates switches and aborts on an
+out-of-range value). `load_space` warns if a known SAGE integer parameter is
+declared with code `0`/`1`, or if a continuous parameter is declared with `2`.
+
+Two things to keep in mind when doing this:
+
+- The objective is **piecewise constant** along a switch axis, so PSO gets no
+  gradient information there and particles that round to the same level run
+  identical SAGE configurations. For a switch with only two or three levels,
+  running one campaign per level is more informative — you get a fit for each
+  mechanism to compare, rather than one winner and no information about the
+  rest. Switches with many levels (`FeedbackFreeModeOn` has eight) are where
+  co-fitting earns its place.
+- Sampling is over `[lb-0.5, ub+0.5]` so every level gets equal probability;
+  sampling `[lb, ub]` and rounding would give the two end levels half the width
+  of the interior ones.
 
 ---
 
@@ -227,6 +311,9 @@ BlackHoleGrowthRate,eBHgrowth,1,0.0001,0.5
 | `MZR` | Mass-Metallicity Relation |
 | `SHMR` | Stellar-Halo Mass Relation |
 | `SMD` | Stellar Mass Density history |
+| `FICS` | Intracluster-star mass fraction, f_ICS = m_ICS / M_*,halo, from z=0 to z=2 |
+| `FICS_Mvir` | Intracluster-star mass fraction vs host halo mass at z=0 (Contini 2021) |
+| `MLF` | Galactic-wind mass-loading factor vs circular velocity at z=0 (requires `FIREmodeOn=1`) |
 
 ### Constraint Syntax
 
@@ -275,7 +362,7 @@ SAGE output is automatically converted to CSV files:
 | `sage_himf_all_redshifts.csv` | HI Mass Function |
 | `sage_h2mf_all_redshifts.csv` | H2 Mass Function |
 | `sage_mzr_all_redshifts.csv` | Mass-Metallicity Relation |
-| `sage_history.csv` | Cosmic history (CSFRDH, SMD) |
+| `sage_history.csv` | Cosmic history (CSFRDH, SMD, FICS) |
 
 Files are tab-separated with no headers.
 

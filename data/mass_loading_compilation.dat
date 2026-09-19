@@ -1,0 +1,88 @@
+# Observed galactic-wind mass-loading factors against circular velocity.
+#
+#   eta = Mdot_outflow / SFR      v_circ in km/s
+#
+# Assembled from the outflow compilation used by the SAGE26 plots
+# (SAGE26/data/outflows/), which digitised each of the sources below.  The
+# SHARK v2 model curve in that directory is deliberately NOT included here --
+# it is a model, not a measurement.
+#
+# Sources:
+#   Rupke05     Rupke, Veilleux & Sanders (2005), ULIRGs
+#   Heckman15   Heckman et al. (2015), starburst/LBA galaxies
+#   Chisholm17  Chisholm et al. (2017), low-mass star-forming galaxies
+#   Sugahara17  Sugahara et al. (2017), z ~ 0-2 star-forming galaxies
+#
+# Caveats:
+#   * No published uncertainties survive the digitisation, so the MLF
+#     constraint bins in log v_circ and takes the scatter between independent
+#     measurements as the error.  That scatter is dominated by the systematic
+#     disagreement between outflow-rate definitions (which gas phase, which
+#     aperture, which velocity cut), which is the honest error budget: two
+#     galaxies at the same v_circ differ by more than an order of magnitude.
+#   * eta is defined differently between these papers (cool gas vs total,
+#     instantaneous vs time-averaged).  No attempt is made to homogenise.
+#   * v_circ is the observers' rotation or velocity-dispersion proxy; the model
+#     is compared using Vvir, which is not identically the same quantity.
+#   * The samples are heterogeneous in redshift (Sugahara+17 reaches z ~ 2);
+#     the constraint compares them all against z = 0, which is defensible only
+#     because the scatter dwarfs any evolution over this range.
+#
+# Columns:
+#   1  v_circ [km/s]
+#   2  eta
+#   3  source
+#
+#     v_circ        eta  source
+    52.9141    3.56336  Heckman15
+    55.2147    6.23047  Heckman15
+    68.2515    7.87557  Heckman15
+    71.3190    4.42377  Heckman15
+    72.8528    2.62293  Heckman15
+    75.9202    0.62025  Rupke05
+    78.2209    3.97032  Heckman15
+    82.8221    0.90562  Chisholm17
+    83.5890    1.79640  Heckman15
+    85.1227    2.31202  Heckman15
+    88.9571    0.79828  Heckman15
+    88.9571    3.97032  Heckman15
+    90.4908    5.90252  Heckman15
+    93.5583   13.52432  Heckman15
+   101.2270    1.16556  Sugahara17
+   107.3620    0.74275  Heckman15
+   111.1963    1.18676  Sugahara17
+   115.7975    8.01880  Heckman15
+   118.8650    1.29868  Sugahara17
+   124.2331    4.92901  Heckman15
+   130.3681    0.82758  Sugahara17
+   131.9018    6.45916  Heckman15
+   132.6687    6.45916  Rupke05
+   133.4356    6.81804  Heckman15
+   138.0368    1.23032  Chisholm17
+   146.4724    4.66956  Sugahara17
+   148.7730    0.99103  Sugahara17
+   151.8405    0.66661  Heckman15
+   151.8405    1.25270  Heckman15
+   156.4417    0.23861  Chisholm17
+   162.5767    2.53006  Heckman15
+   163.3436    6.34378  Rupke05
+   174.8466    1.76431  Sugahara17
+   176.3804    1.25270  Rupke05
+   179.4479    0.07132  Chisholm17
+   184.0491    2.03797  Heckman15
+   184.0491    1.06512  Sugahara17
+   187.8834    1.37084  Rupke05
+   203.2209    0.54673  Chisholm17
+   204.7546    0.33606  Rupke05
+   204.7546    0.16639  Rupke05
+   212.4233    1.18676  Sugahara17
+   214.7239    3.62816  Sugahara17
+   225.4601    0.95594  Heckman15
+   226.9939    2.53006  Heckman15
+   240.7975    1.14474  Heckman15
+   241.5644    0.30161  Heckman15
+   271.4724    0.55667  Rupke05
+   325.1534    0.51795  Rupke05
+   417.1779    0.21415  Rupke05
+   421.0123    0.17564  Rupke05
+   458.5890    0.16639  Rupke05

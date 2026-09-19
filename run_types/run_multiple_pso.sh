@@ -11,7 +11,7 @@ if [ $# -lt 2 ]; then
     echo "Constraints can be any combination of:"
     echo "  SMF_z0, SMF_z02, SMF_z05, SMF_z08, SMF_z10, SMF_z11, SMF_z15, SMF_z20"
     echo "  SMF_z24, SMF_z31, SMF_z36, SMF_z46, SMF_z57, SMF_z63, SMF_z77, SMF_z85, SMF_z104"
-    echo "  BHMF_z0, BHMF_z20, BHBM, CSFRDH, HIMF, H2MF, MZR, SHMR, SMD"
+    echo "  BHMF_z0, BHMF_z20, BHBM, CSFRDH, HIMF, H2MF, MZR, SHMR, SMD, FICS, FICS_Mvir"
     exit 1
 fi
 
@@ -41,12 +41,6 @@ BASE_PATH="/Users/mbradley/Documents/PhD/SAGE-2.0/sage-model/sage"
 PARTICLES=16
 ITERATIONS=50
 TEST="student-t"
-AGE_ALIST_FILE_MINI_MILLENNIUM="/Users/mbradley/Documents/PhD/SAGE-2.0/sage-model/input/millennium/trees/millennium.a_list"
-BOXSIZE=62.5
-SIM_MINI_MILLENNIUM=1
-VOL_FRAC=1.0
-OMEGA0=0.25 
-H0=0.73
 SPACEFILE="/Users/mbradley/Documents/PhD/SAGE-2.0/sage-model/optim/space.txt"
 ACCOUNT="oz004"
 
@@ -79,12 +73,6 @@ for i in $(seq 1 $NUM_RUNS); do
       -t "$TEST" \
       -x "$CONSTRAINTS" \
       -csv "$RUN_CSV_OUTPUT" \
-      --age-alist-file "$AGE_ALIST_FILE_MINI_MILLENNIUM" \
-      --sim "$SIM_MINI_MILLENNIUM" \
-      --boxsize "$BOXSIZE" \
-      --vol-frac "$VOL_FRAC" \
-      --Omega0 "$OMEGA0" \
-      --h0 "$H0" \
       -S "$SPACEFILE"
     
     if [ $? -ne 0 ]; then
@@ -108,8 +96,8 @@ Constraints: $CONSTRAINTS
 Particles: $PARTICLES
 Iterations: $ITERATIONS
 Statistical test: $TEST
-Box size: $BOXSIZE
-Volume fraction: $VOL_FRAC
+Box size: read from the SAGE output header
+Volume fraction: read from the SAGE output header
 
 Individual run directories:
 EOF

@@ -5,6 +5,8 @@ Simulation configuration module for SAGE-PSO.
 Contains simulation-specific parameters including snapshots, redshifts, and cosmology.
 """
 
+import os
+
 import numpy as np
 
 # Simulation type constants
@@ -167,6 +169,8 @@ def get_snapshot_map(sim_id):
             'MZR': [49],
             'SHMR': [49],
             'SMD': [5, 8, 10, 12, 15, 17, 20, 23, 26, 29, 32, 35, 38, 41, 44, 47, 49],  # Extended history
+            'FICS': [23, 26, 29, 32, 35, 38, 41, 44, 47, 49],  # z~2.03 to z~0
+            'FICS_Mvir': [49],   # z ~ 0
         }
     elif sim_id == SIM_MINIMILLENNIUM:
         # miniMillennium: 64 snapshots (0-63), snapshot 63 is z=0
@@ -194,6 +198,8 @@ def get_snapshot_map(sim_id):
             'MZR': [63],
             'SHMR': [63],
             'SMD': [10, 14, 18, 23, 27, 32, 36, 40, 44, 48, 52, 56, 60, 63],
+            'FICS': [32, 34, 36, 38, 40, 44, 48, 52, 56, 60, 63],  # z~2.07 to z=0
+            'FICS_Mvir': [63],   # z = 0
         }
     else:  # MTNG
         # MTNG: 100 snapshots (0-99), snapshot 99 is z=0
@@ -215,6 +221,8 @@ def get_snapshot_map(sim_id):
             'MZR': [99],
             'SHMR': [99],
             'SMD': [20, 25, 30, 33, 40, 50, 55, 60, 67, 72, 78, 84, 90, 95, 99],
+            'FICS': [50, 55, 60, 67, 72, 78, 84, 90, 95, 99],  # z~2 to z=0
+            'FICS_Mvir': [99],   # z = 0
         }
 
 
@@ -286,3 +294,208 @@ def get_smd_snapshots(sim_id):
     """Get the snapshots used for SMD constraint."""
     snapshot_map = get_snapshot_map(sim_id)
     return snapshot_map['SMD']
+
+
+def get_fics_snapshots(sim_id):
+    """Get the snapshots used for the FICS constraint (z = 0 to z = 2)."""
+    snapshot_map = get_snapshot_map(sim_id)
+    return snapshot_map['FICS']
+
+
+def get_fics_mvir_snapshot(sim_id):
+    """Get the z = 0 snapshot used for the FICS_Mvir constraint."""
+    snapshot_map = get_snapshot_map(sim_id)
+    return snapshot_map['FICS_Mvir']
+
+# ---------------------------------------------------------------------------
+# Resolving snapshots from the SAGE output rather than from hard-coded tables
+# ---------------------------------------------------------------------------
+#
+# A snapshot number means nothing on its own -- it is only a label for a
+# redshift, and the mapping differs between simulations.  What a constraint
+# actually needs is "the snapshot closest to the redshift my observations were
+# measured at".  SAGE writes the full mapping into Header/snapshot_redshifts, so
+# that question can be answered from the output file instead of from a table
+# that has to be maintained per simulation (and which had SMF_z50 pointing at
+# z = 5.72 for observations measured at z = 4.8-5.3).
+#
+# The only thing that must be declared here is each constraint's TARGET
+# REDSHIFT, because that is a property of the observations, not of the
+# simulation.  Everything else is read from the file.
+
+# Single-epoch constraints: the redshift their observations represent.
+CONSTRAINT_TARGET_REDSHIFT = {
+    'SMF_z0':      0.0,    # paper_smf_observations.csv z bin 0.0-0.2;
+                           # pinned to the z=0 snapshot, not the bin centre,
+                           # since the SMF barely evolves over 0 < z < 0.2
+    'SMF_z05':     0.65,   # z bin 0.5-0.8
+    'SMF_z10':     1.00,   # z bin 0.8-1.2
+    'SMF_z20':     2.05,   # z bin 1.8-2.3
+    'SMF_z30':     3.05,   # z bin 2.8-3.3
+    'SMF_z40':     4.05,   # z bin 3.8-4.3
+    'SMF_z50':     5.05,   # z bin 4.8-5.3
+    'SMF_z60':     6.05,   # z bin 5.8-6.3
+    'SMF_z70':     7.05,   # z bin 6.8-7.3
+    'SMF_z80':     8.05,   # z bin 7.8-8.3
+    'SMF_z100':   10.25,   # z bin 9.5-11.0
+    'SMF_Red_z0':  0.0,    # GAMA morphological SMF
+    'SMF_Blue_z0': 0.0,
+    'BHMF_z0':     0.0,    # fig4_bhmf_z0.1.txt; as SMF_z0, pinned to z=0
+    'BHMF_z10':    1.00,   # fig4_bhmf_z1.0.txt
+    'BHBM':        0.0,
+    'HIMF':        0.0,    # Jones+18
+    'H2MF':        0.0,    # Fletcher+21
+    'MZR':         0.0,    # Curti+20 (SDSS)
+    'SHMR':        0.0,    # Correa & Schaye 19
+    'FICS_Mvir':   0.0,    # Contini 2021, z ~ 0
+    'MLF':         0.0,    # outflow compilation, z ~ 0 (Sugahara+17 reaches z~2)
+}
+
+# History constraints: the redshift range they span, and how many epochs to
+# sample across it.  The count is a compromise -- enough to trace the shape,
+# few enough that one constraint does not dominate the objective by point count.
+CONSTRAINT_TARGET_REDSHIFT_RANGE = {
+    'FICS':   (0.0, 2.0, 11),    # ICL fraction compilation spans z = 0-2
+    'CSFRDH': (0.0, 6.0, 14),    # domain is lookback time to 12.62 Gyr ~ z = 6
+    'SMD':    (0.0, 8.0, 16),    # SMD.ecsv spans z = 0.35-11
+}
+
+
+def read_output_snapshot_redshifts(modeldir):
+    """Snapshot-to-redshift mapping and available snapshots, from SAGE output.
+
+    Returns (redshifts, available) where `redshifts` is indexed by snapshot
+    number and `available` is the sorted list of snapshots the file contains.
+    Returns (None, None) if no readable output is present.
+    """
+    import glob
+    import h5py
+
+    files = sorted(glob.glob(os.path.join(modeldir, 'model_*.hdf5')))
+    if not files:
+        return None, None
+
+    with h5py.File(files[0], 'r') as f:
+        redshifts = None
+        for path in ('Header/snapshot_redshifts', 'Core_0/Header/snapshot_redshifts'):
+            if path in f:
+                redshifts = np.array(f[path], dtype=float)
+                break
+
+        available = sorted(int(k.split('_')[1]) for k in f.keys()
+                           if k.startswith('Snap_'))
+        if not available and 'Core_0' in f:
+            available = sorted(int(k.split('_')[1]) for k in f['Core_0'].keys()
+                               if k.startswith('Snap_'))
+
+        # Fall back to the per-snapshot redshift attribute if the header
+        # dataset is absent (older output).
+        if redshifts is None and available:
+            n = max(available) + 1
+            redshifts = np.full(n, np.nan)
+            for snap in available:
+                grp = f.get('Snap_%d' % snap) or f['Core_0']['Snap_%d' % snap]
+                z = grp.attrs.get('redshift')
+                if z is not None:
+                    redshifts[snap] = float(z)
+
+    return redshifts, available
+
+
+def nearest_snapshot(z_target, redshifts, available):
+    """Snapshot whose redshift is closest to z_target."""
+    usable = [s for s in available
+              if s < len(redshifts) and np.isfinite(redshifts[s])]
+    if not usable:
+        return None
+    return min(usable, key=lambda s: abs(redshifts[s] - z_target))
+
+
+def build_snapshot_map(redshifts, available):
+    """Constraint-to-snapshot mapping resolved against a real output file.
+
+    Each constraint is given the snapshot closest to the redshift its
+    observations were measured at, so the mapping is correct for any simulation
+    without a hard-coded table.
+    """
+    mapping = {}
+
+    for name, z_target in CONSTRAINT_TARGET_REDSHIFT.items():
+        snap = nearest_snapshot(z_target, redshifts, available)
+        if snap is not None:
+            mapping[name] = [snap]
+
+    for name, (z_lo, z_hi, count) in CONSTRAINT_TARGET_REDSHIFT_RANGE.items():
+        snaps = []
+        for z_target in np.linspace(z_lo, z_hi, count):
+            snap = nearest_snapshot(z_target, redshifts, available)
+            if snap is not None and snap not in snaps:
+                snaps.append(snap)
+        if snaps:
+            mapping[name] = sorted(snaps)
+
+    return mapping
+
+
+def describe_snapshot_map(mapping, redshifts):
+    """Human-readable lines for a resolved snapshot map, for the run log."""
+    lines = []
+    for name in sorted(mapping):
+        snaps = mapping[name]
+        target = CONSTRAINT_TARGET_REDSHIFT.get(name)
+        if len(snaps) == 1:
+            z = redshifts[snaps[0]]
+            note = '' if target is None else '  (observations at z = %.2f)' % target
+            lines.append('%-12s snap %-4d z = %.4f%s' % (name, snaps[0], z, note))
+        else:
+            zs = [redshifts[s] for s in snaps]
+            lines.append('%-12s %2d snapshots, z = %.3f to %.3f'
+                         % (name, len(snaps), min(zs), max(zs)))
+    return lines
+
+# Reference-CSV epochs, also resolved from the output rather than tabulated.
+# These drive the sage_*.csv files the diagnostics overlay, so they only need to
+# span the range the constraints use.
+# These drive the column layout of sage_smf_all_redshifts.csv and friends, and
+# the SMF_z* constraints' get_sage_x_y() reads fixed column PAIRS out of it
+# (SMF_z20 reads pair 6, SMF_z30 pair 8, SMF_z40 pair 10).  Shortening this list
+# silently puts those indices out of range, so it has to stay 11 epochs in this
+# order until get_sage_x_y is taught to look up its own column.
+REFERENCE_TARGET_REDSHIFTS = [0.0, 0.18, 0.51, 0.76, 1.08, 1.50,
+                              2.07, 2.42, 3.06, 3.58, 4.18]
+HISTORY_TARGET_REDSHIFTS = (0.0, 8.0, 17)
+
+
+def resolve_target_snapshots(redshifts, available,
+                             targets=REFERENCE_TARGET_REDSHIFTS):
+    """Snapshots nearest a list of target redshifts, in target order."""
+    out = []
+    for z in targets:
+        snap = nearest_snapshot(z, redshifts, available)
+        if snap is not None:
+            out.append(snap)
+    return out
+
+
+def resolve_history_snapshots(redshifts, available,
+                              span=HISTORY_TARGET_REDSHIFTS):
+    """Snapshots spanning a redshift range, low z first, duplicates removed."""
+    z_lo, z_hi, count = span
+    out = []
+    for z in np.linspace(z_lo, z_hi, count):
+        snap = nearest_snapshot(z, redshifts, available)
+        if snap is not None and snap not in out:
+            out.append(snap)
+    return sorted(out)
+
+
+def identify_simulation(n_snapshots):
+    """Best-guess simulation id from the number of snapshots in the output.
+
+    Only used for the legacy fallback path and for labelling: 50 snapshots is
+    the Uchuu grid, 64 the Millennium grid, 100 MTNG.  Everything that matters
+    is now resolved from the output's own redshift table, so a wrong guess here
+    changes nothing except a log line.
+    """
+    return {50: SIM_MINIUCHUU, 64: SIM_MINIMILLENNIUM,
+            100: SIM_MTNG}.get(int(n_snapshots))

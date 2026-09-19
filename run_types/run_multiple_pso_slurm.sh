@@ -37,12 +37,6 @@ BASE_PATH="../../SAGE-2.0/sage-model/sage"
 PARTICLES=13
 ITERATIONS=50
 TEST="student-t"
-AGE_ALIST_FILE_MINI_MILLENNIUM="../../SAGE-2.0/sage-model/input/millennium/trees/millennium.a_list"
-BOXSIZE=62.5
-SIM_MINI_MILLENNIUM=1
-VOL_FRAC=1.0
-OMEGA0=0.25 
-H0=0.73
 SPACEFILE="./space.txt"
 ACCOUNT="oz004"
 
@@ -71,8 +65,8 @@ Constraints: $CONSTRAINTS
 Particles: $PARTICLES
 Iterations: $ITERATIONS
 Statistical test: $TEST
-Box size: $BOXSIZE
-Volume fraction: $VOL_FRAC
+Box size: read from the SAGE output header
+Volume fraction: read from the SAGE output header
 
 Individual run directories:
 EOF
@@ -107,12 +101,6 @@ python3 ./main.py \
   -t "$TEST" \
   -x "$CONSTRAINTS" \
   -csv "$RUN_CSV_OUTPUT" \
-  --age-alist-file "$AGE_ALIST_FILE_MINI_MILLENNIUM" \
-  --sim "$SIM_MINI_MILLENNIUM" \
-  --boxsize "$BOXSIZE" \
-  --vol-frac "$VOL_FRAC" \
-  --Omega0 "$OMEGA0" \
-  --h0 "$H0" \
   -S "$SPACEFILE"
 
 if [ $? -ne 0 ]; then

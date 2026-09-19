@@ -1,18 +1,17 @@
 #!/bin/bash
 
+# Box size, cosmology, processed volume fraction, the scale-factor list and
+# the snapshot-to-redshift mapping are all read from the SAGE output header,
+# so there is nothing here to keep in sync with the simulation. Switching
+# simulation is just CONFIG_PATH.
+
 CONFIG_PATH="../SAGE26/input/millennium.par"
 BASE_PATH="../SAGE26/sage"
 OUTPUT_PATH="./millennium_pso"
-PARTICLES=25
-ITERATIONS=5
+PARTICLES=10
+ITERATIONS=50
 TEST="chi2"
-CONSTRAINTS="SMF_z0"
-AGE_ALIST_FILE_MINI_MILLENNIUM="../SAGE26/input/millennium/trees/millennium.a_list"
-BOXSIZE=62.5
-SIM_MINI_MILLENNIUM=1
-VOL_FRAC=1.0
-OMEGA0=0.25
-H0=0.73
+CONSTRAINTS="SMF_z0,CSFRDH"
 CSVOUTPUT="./millennium_pso/pso.csv"
 SPACEFILE="./space.txt"
 
@@ -25,10 +24,4 @@ python3 ./main.py \
   -t "$TEST" \
   -x "$CONSTRAINTS" \
   -csv "$CSVOUTPUT" \
-  --age-alist-file "$AGE_ALIST_FILE_MINI_MILLENNIUM" \
-  --sim "$SIM_MINI_MILLENNIUM" \
-  --boxsize "$BOXSIZE" \
-  --vol-frac "$VOL_FRAC" \
-  --Omega0 "$OMEGA0" \
-  --h0 "$H0" \
   -S "$SPACEFILE"

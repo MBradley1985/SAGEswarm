@@ -14,12 +14,15 @@ import glob
 from pathlib import Path
 
 def load_space(space_file):
-    """Load parameter space definition"""
-    space = np.genfromtxt(space_file, 
-                        dtype=[('name', 'U30'), ('plot_label', 'U30'), 
-                              ('is_log', 'i4'), ('lb', 'f8'), ('ub', 'f8')],
-                        delimiter=',')
-    return space
+    """Load parameter space definition.
+
+    Delegates to analysis.load_space so there is a single parser for the space
+    file format; a local copy would silently mis-read the integer-switch
+    sampling code (column 3 == 2) as a log-sampled parameter.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from src import analysis
+    return analysis.load_space(space_file)
 
 def read_pso_csv(csv_path):
     """

@@ -17,7 +17,7 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from src.constraints import SMF_z0, SMF_z05, SMF_z10, SMF_z20, SMF_z30, SMF_z40
-from src.constraints import BHMF_z0, BHMF_z10, BHBM, HIMF, MZR, SHMR
+from src.constraints import BHMF_z0, BHMF_z10, BHBM, HIMF, MZR, SHMR, FICS, FICS_Mvir, MLF
 
 # miniMillennium parameters
 SIM_PARAMS = dict(sim=1, boxsize=62.5, vol_frac=1.0, h0=0.73, Omega0=0.25,
@@ -36,6 +36,9 @@ CONSTRAINTS = [
     ('HIMF',     HIMF,     {'domain': (8.0, 10.75), 'y_range': (-7, 0)}),
     ('MZR',      MZR,      {'domain': (8.0, 11.0), 'y_range': (7.0, 10.0)}),
     ('SHMR',     SHMR,     {'domain': (11.0, 15.0), 'y_range': (6, 13)}),
+    ('FICS',     FICS,     {'domain': (0.0, 2.0), 'y_range': (0.0, 1.0)}),
+    ('FICS_Mvir', FICS_Mvir, {'domain': (14.0, 15.2), 'y_range': (0.0, 1.0)}),
+    ('MLF',      MLF,      {'domain': (1.9, 2.7), 'y_range': (-2.0, 2.0)}),
 ]
 
 
@@ -80,9 +83,14 @@ def check_constraint(name, cls, expected):
     # At least some x values must overlap with the expected domain.
     # Raw data may extend outside the domain — get_data() applies domain filtering.
     dom = expected['domain']
+    # Most constraints should have several points in their domain, but a few
+    # legitimately have fewer: FICS_Mvir's default domain is capped at what a
+    # 100/h Mpc box can measure, which admits only the two lowest cluster
+    # observations. Such constraints declare their own minimum.
+    min_in_domain = expected.get('min_in_domain', 3)
     in_domain = (x_obs >= dom[0]) & (x_obs <= dom[1])
-    if np.sum(in_domain) < 3:
-        errors.append(f"fewer than 3 x_obs points within domain {dom} "
+    if np.sum(in_domain) < min_in_domain:
+        errors.append(f"fewer than {min_in_domain} x_obs points within domain {dom} "
                       f"(got {np.sum(in_domain)}, x range: [{x_obs.min():.2f}, {x_obs.max():.2f}])")
 
     # y values must be in physically plausible range
@@ -97,6 +105,16 @@ def check_constraint(name, cls, expected):
             errors.append(f"MZR plateau {plateau:.2f} > 9.5 — likely wrong +9.0 formula (should be +8.69)")
         if plateau < 8.0:
             errors.append(f"MZR plateau {plateau:.2f} < 8.0 — suspiciously low")
+
+    # FICS specific: an ICS mass fraction is a fraction, and the observed trend
+    # is a decline from z = 0 towards higher redshift
+    if name == 'FICS':
+        if np.any(y_obs <= 0.0) or np.any(y_obs >= 1.0):
+            errors.append(f"f_ICS out of (0, 1): [{y_obs.min():.3f}, {y_obs.max():.3f}]")
+        if np.any(y_obs - y_dn < 0.0):
+            errors.append("f_ICS lower error bar extends below zero")
+        if y_obs[np.argmin(x_obs)] <= y_obs[np.argmax(x_obs)]:
+            errors.append("f_ICS does not decline from z=0 to high z")
 
     # SMF specific: phi values should be in log space (negative values)
     if name.startswith('SMF') or name.startswith('BHMF') or name == 'HIMF':

@@ -990,24 +990,30 @@ def read_hdf(frp, snap_num = None, param = None):
     return np.array(property[snap_num][param])
 
 def read_sage_hdf(frp, snap_num=None, fields=None):
-    # Get the data structure defined in galdtype_darksage
-    Galdesc = galdtype_sage()
-    
-    # If fields are provided, filter Galdesc to include only specified fields
-    if fields is not None:
-        Galdesc = [field for field in Galdesc if field[0] in fields]
-    
-    # Open the HDF file and select the specified snapshot
+    """Read galaxy properties from one snapshot of a SAGE HDF5 output.
+
+    The field list comes from the file itself rather than from a hard-coded
+    schema: whatever datasets the snapshot group contains are what this SAGE
+    build wrote.  That way a new or renamed output field needs no change here,
+    and `fields=None` returns everything the file has.
+
+    A requested field the file does not contain is filled with zeros and
+    reported, so a build lacking (say) H1gas can still be scored on the
+    constraints that do not need it.
+    """
     with h5.File(frp, 'r') as property:
         snapshot_data = property[snap_num]
-        
-        # Extract each specified parameter
+
+        # What this file actually provides, in file order.
+        available = list(snapshot_data.keys())
+        requested = list(available) if fields is None else list(fields)
+
         data = {}
         missing = []
-        for field_name, field_type in Galdesc:
-            try:
+        for field_name in requested:
+            if field_name in snapshot_data:
                 data[field_name] = np.array(snapshot_data[field_name])
-            except KeyError:
+            else:
                 missing.append(field_name)
 
         # Fill absent fields with zeros rather than omitting them.  Callers index
@@ -1024,12 +1030,34 @@ def read_sage_hdf(frp, snap_num=None, fields=None):
             n = len(next(iter(data.values()))) if data else 0
             for field_name in missing:
                 data[field_name] = np.zeros(n, dtype=np.float32)
-            print(f"Fields absent from '{snap_num}', filled with zeros: "
-                  f"{', '.join(missing)}")
+            print(f"Fields absent from '{snap_num}' in {os.path.basename(frp)}, "
+                  f"filled with zeros: {', '.join(missing)}")
 
     return data
 
+def sage_fields(frp, snap_num=None):
+    """Field names one SAGE output file provides, read from the file.
+
+    Pass snap_num to inspect a particular snapshot; otherwise the first
+    Snap_* group found is used.  Use this instead of galdtype_sage() when you
+    need to know what is available.
+    """
+    with h5.File(frp, 'r') as f:
+        if snap_num is None:
+            snaps = [k for k in f.keys() if k.startswith('Snap_')]
+            if not snaps:
+                return []
+            snap_num = sorted(snaps, key=lambda k: int(k.split('_')[1]))[-1]
+        return list(f[snap_num].keys())
+
+
 def galdtype_sage(Nannuli=30, Nage=1):
+    """Reference schema for SAGE output fields.
+
+    No longer used for reading -- read_sage_hdf discovers fields from the file
+    -- but kept as documentation of the expected field names and types, and for
+    callers that want a dtype rather than a name list.
+    """
     floattype = np.float32
     
     # Define array dimensions based on age bins for stars
@@ -1061,7 +1089,9 @@ def galdtype_sage(Nannuli=30, Nage=1):
         ('MetalsStellarMass', np.float32),
         ('Mvir', np.float32), 
         ('OutflowRate', np.float32),                 
-        ('Pos', (np.float32, 3)),
+        ('Posx', np.float32),
+        ('Posy', np.float32),
+        ('Posz', np.float32),
         ('QuasarModeBHaccretionMass', np.float32),             
         ('Rvir', np.float32),
         ('SAGEHaloIndex', np.int32),
@@ -1072,13 +1102,17 @@ def galdtype_sage(Nannuli=30, Nage=1):
         ('SfrDiskZ', np.float32),
         ('SimulationHaloIndex', np.int32),
         ('SnapNum', np.int32),                    
-        ('Spin', (np.float32, 3)),                  
+        ('Spinx', np.float32),
+        ('Spiny', np.float32),
+        ('Spinz', np.float32),
         ('StellarMass', np.float32),
         ('TimeOfLastMajorMerger', np.int32),
         ('TimeOfLastMinorMerger', np.int32),                                     
         ('Type', np.int32),                     
         ('VelDisp', np.float32),                 
-        ('Vel', (np.float32, 3)),
+        ('Velx', np.float32),
+        ('Vely', np.float32),
+        ('Velz', np.float32),
         ('Vmax', np.float32),                               
         ('Vvir', np.float32),                  
         ('dT', np.float32),  
@@ -1087,7 +1121,39 @@ def galdtype_sage(Nannuli=30, Nage=1):
         ('infallVvir', np.float32),                 
         ('mergeIntoID', np.int32),                    
         ('mergeIntoSnapNum', np.int32),                    
-        ('mergeType', np.int32)
+        ('mergeType', np.int32),
+        # ---- SAGE26 additions -------------------------------------------------
+        # read_sage_hdf filters this list by the caller's requested fields, so
+        # declaring these costs nothing; it only makes them available.  A build
+        # that does not write one of them gets zeros and a printed notice.
+        ('CGMgas', np.float32),                 # circumgalactic gas reservoir
+        ('MetalsCGMgas', np.float32),
+        ('Concentration', np.float32),          # NFW c; drives DynamicDisruptionSplit=2
+        ('ICS_disrupt', np.float32),            # ICS built by satellite disruption
+        ('ICS_accrete', np.float32),            # ICS accreted already-formed
+        ('ICS_sum_mt', np.float32),             # mass-weighted ICS deposit time
+        ('MergerBulgeMass', np.float32),        # bulge from mergers
+        ('MergerBulgeRadius', np.float32),
+        ('InstabilityBulgeMass', np.float32),   # bulge from disc instability
+        ('InstabilityBulgeRadius', np.float32),
+        ('BulgeRadius', np.float32),
+        ('MassLoading', np.float32),            # eta from the FIRE scaling
+        ('OutflowRate', np.float32),
+        ('Regime', np.int32),                   # cold-stream / hot-halo regime
+        ('FFBRegime', np.int32),                # feedback-free burst regime
+        ('infallStellarMass', np.float32),
+        ('TimeOfInfall', np.float32),
+        ('VvirPeak', np.float32),
+        ('RcoolToRvir', np.float32),
+        ('mdot_cool', np.float32),
+        ('mdot_stream', np.float32),
+        ('tcool', np.float32),
+        ('tff', np.float32),
+        ('tcool_over_tff', np.float32),
+        ('tdeplete', np.float32),
+        ('r_heat', np.float32),
+        ('g_max', np.float32),
+        ('H2DepletionTime_Gyr', np.float32),
     ]
     
     return Galdesc

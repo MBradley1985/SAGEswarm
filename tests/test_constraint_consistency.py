@@ -35,7 +35,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from src.constraints import (
     SMF_z0, SMF_z05, SMF_z10, SMF_z20, SMF_z30, SMF_z40,
-    BHMF_z0, BHMF_z10, BHBM, HIMF, MZR, SHMR
+    BHMF_z0, BHMF_z10, BHBM, HIMF, MZR, SHMR, FICS
 )
 
 # ── Constraint registry ────────────────────────────────────────────────────────
@@ -53,6 +53,7 @@ ALL_CONSTRAINTS = {
     'HIMF':     HIMF,
     'MZR':      MZR,
     'SHMR':     SHMR,
+    'FICS':     FICS,
 }
 
 DEFAULT_ACTIVE = ['SMF_z0', 'BHBM', 'MZR', 'HIMF']
@@ -79,6 +80,7 @@ def check_obs_sanity(sim_params):
         'HIMF':     {'x_range': (7.0, 11.5), 'y_range': (-5.0, 0.0),  'label': 'log10(MHI/Msun) vs log10(phi)'},
         'MZR':      {'x_range': (8.0, 12.0), 'y_range': (7.5, 9.5),   'label': 'log10(M*/Msun) vs 12+log(O/H)'},
         'SHMR':     {'x_range': (10.5, 15.5),'y_range': (6.0, 13.0),  'label': 'log10(Mhalo) vs log10(M*)'},
+        'FICS':     {'x_range': (0.0, 2.0),  'y_range': (0.0, 1.0),   'label': 'z vs f_ICS = m_ICS/M*,halo'},
     }
 
     results = {}

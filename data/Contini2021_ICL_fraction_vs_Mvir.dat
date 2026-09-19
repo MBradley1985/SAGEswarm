@@ -1,0 +1,60 @@
+# Observed intracluster-light / intracluster-star mass fraction as a function of
+# host halo mass, near z ~ 0.
+#
+#   f_ICS = m_ICS / M_*,halo    with  M_*,halo = m_ICS + m_BCG + sum(m_satellites)
+#
+# The same definition the FICS and FICS_Mvir constraints use, so this is a
+# like-for-like comparison.  Compiled in Contini (2021), Galaxies 9, 60, from the
+# primary references listed below; the values here are those tabulated in the
+# SAGE26 ICS diagnostics
+# (SAGE26/plotting/random_plotting_scripts/ICS_assembly_diagnostics.py, Plot 7).
+#
+# Why this constraint exists alongside FICS: the disruption-split mechanisms in
+# SAGE26 differ in how the ICS/BCG split depends on the satellite-to-host mass
+# ratio, so their distinguishing prediction is the SLOPE of f_ICS with halo mass.
+# The fixed-fraction mode (DynamicDisruptionSplit=0) has no halo-mass dependence
+# by construction; the mass-ratio (1) and concentration-weighted (2) modes do,
+# and differ from each other.  f_ICS(z) marginalises over halo mass and so cannot
+# separate them -- all three can reproduce the same mean fraction.  This relation
+# can.
+#
+# Caveats:
+#   * Where a paper reports a combined BCG+ICL fraction or an ICL-only fraction,
+#     the ICL-only value is taken.  The ICL/BCG split is definition dependent
+#     (surface-brightness cut, double-Sersic decomposition, aperture), which is
+#     why two clusters of similar mass can differ by a factor of several here.
+#   * Errors are as tabulated and are symmetric.  They describe the quoted
+#     measurement uncertainty, not the systematic spread between definitions,
+#     which is larger: compare Burke+15 (0.03) with Kluge+21 (0.30) at almost
+#     the same halo mass.
+#   * Halo masses are M_200 or M_vir as quoted by the primary reference; no
+#     attempt is made to homogenise the mass definition.
+#   * These are rich clusters, log10 M_vir = 14.2-15.1.  A simulation box must
+#     actually contain such haloes to be compared against them: microUchuu
+#     (100/h Mpc) reaches log10 M_vir ~ 14.6 and so covers only the lower half of
+#     this range, miniMillennium (62.5/h Mpc) reaches ~14.2 and covers none of
+#     it.  FICS_Mvir warns, naming the points, when the model cannot reach them.
+#
+# Sources:
+#   Zibetti05        Zibetti et al. (2005)
+#   KrickBernstein07 Krick & Bernstein (2007)
+#   Presotto14       Presotto et al. (2014)
+#   Burke15          Burke, Hilton & Collins (2015)
+#   MontesTrujillo18 Montes & Trujillo (2018)
+#   Furnell21        Furnell et al. (2021)
+#   Kluge21          Kluge et al. (2021)
+#
+# Columns:
+#   1  log10(M_vir / Msun)
+#   2  f_ICS
+#   3  err_f_ICS   (symmetric)
+#   4  source      short reference tag
+#
+#  log10Mvir      f_ICS        err  source
+     14.20      0.120      0.050  KrickBernstein07
+     14.30      0.110      0.030  Zibetti05
+     14.50      0.300      0.100  Kluge21
+     14.70      0.240      0.090  Furnell21
+     14.90      0.030      0.010  Burke15
+     14.95      0.150      0.070  MontesTrujillo18
+     15.10      0.120      0.020  Presotto14

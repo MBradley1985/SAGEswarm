@@ -20,7 +20,9 @@ import glob
 from src import diagnostics
 from src.simulation_config import (
     get_snapshot_map, get_target_snapshots, get_history_snapshots,
-    get_simulation_config, SIM_MINIUCHUU, SIM_MINIMILLENNIUM, SIM_MTNG
+    resolve_target_snapshots, resolve_history_snapshots, identify_simulation,
+    get_simulation_config, SIM_MINIUCHUU, SIM_MINIMILLENNIUM, SIM_MTNG,
+    read_output_snapshot_redshifts, build_snapshot_map, describe_snapshot_map
 )
 
 
@@ -28,28 +30,37 @@ logger = logging.getLogger('main')
 
 def setup_logging(outdir):
     log_fname = os.path.join(outdir, 'sage_pso.log')
-    fmt = '%(asctime)-15s %(name)s#%(funcName)s:%(lineno)s %(message)s'
-    fmt = logging.Formatter(fmt)
-    fmt.converter = time.gmtime
-    
-    # Set root logger level
-    logging.root.setLevel(logging.INFO)
-    
-    # Console handler
+
+    # Two formats on purpose: the console gets the message only, because a
+    # timestamp and source location on every line buries the information you
+    # actually came to read.  The log file keeps the full detail for debugging.
+    console_fmt = logging.Formatter('%(message)s')
+    file_fmt = logging.Formatter(
+        '%(asctime)-15s %(name)s#%(funcName)s:%(lineno)s %(message)s')
+    file_fmt.converter = time.gmtime
+
+    # Root at DEBUG with the levels set per handler: the console stays at INFO
+    # so it reads as before, while the file records the per-constraint score
+    # breakdown that execution.py logs at DEBUG.  With the root itself at INFO
+    # those records were dropped before either handler saw them, and the
+    # full-detail formatter below had nothing to format.
+    logging.root.setLevel(logging.DEBUG)
+
     console_handler = logging.StreamHandler(stream=sys.stdout)
-    console_handler.setFormatter(fmt)
+    console_handler.setFormatter(console_fmt)
+    console_handler.setLevel(logging.INFO)
     logging.root.addHandler(console_handler)
-    
-    # File handler
+
     file_handler = logging.FileHandler(log_fname)
-    file_handler.setFormatter(fmt)
+    file_handler.setFormatter(file_fmt)
+    file_handler.setLevel(logging.DEBUG)
     logging.root.addHandler(file_handler)
     
     # Ensure all loggers inherit these settings
     logging.getLogger('diagnostics').setLevel(logging.INFO)
     logging.getLogger('main').setLevel(logging.INFO)
 
-def get_required_snapshots(constraints_str, sim=0):
+def get_required_snapshots(constraints_str, sim=0, snapshot_map=None):
     """Get all unique snapshots needed for constraints.
 
     Parameters:
@@ -63,8 +74,10 @@ def get_required_snapshots(constraints_str, sim=0):
     --------
     list : Sorted list of unique snapshot numbers needed
     """
-    # Get simulation-specific snapshot map
-    snapshot_map = get_snapshot_map(sim)
+    # Prefer the map resolved from the SAGE output; fall back to the
+    # hard-coded per-simulation table only if that was unavailable.
+    if snapshot_map is None:
+        snapshot_map = get_snapshot_map(sim)
 
     snapshots = set()
     for constraint in constraints_str.split(','):
@@ -88,7 +101,10 @@ def cleanup_files(opts):
         'h2mf_dump': os.path.join(opts.outdir, 'H2MF_dump.txt'),
         'mzr_dump': os.path.join(opts.outdir, 'MZR_dump.txt'),
         'shmr_dump': os.path.join(opts.outdir, 'SHMR_dump.txt'),
-        'smd_dump': os.path.join(opts.outdir, 'SMD_dump.txt')
+        'smd_dump': os.path.join(opts.outdir, 'SMD_dump.txt'),
+        'fics_dump': os.path.join(opts.outdir, 'FICS_dump.txt'),
+        'fics_mvir_dump': os.path.join(opts.outdir, 'FICS_Mvir_dump.txt'),
+        'mlf_dump': os.path.join(opts.outdir, 'MLF_dump.txt')
     }
 
     # Delete dump files
@@ -148,18 +164,33 @@ def main():
     parser.add_argument('-k', '--keep', help='Keep temporary output files', action='store_true')
     parser.add_argument('-sn', '--snapshot', help='Comma-separated list of snapshot numbers to analyze', 
                    type=lambda x: [int(i) for i in x.split(',')], default=None)
-    parser.add_argument('--sim', help='Simulation to use (0=miniUchuu, 1=miniMillennium, 2=MTNG)', 
-                   type=int, default=0)
-    parser.add_argument('--boxsize', help='Size of the simulation box in Mpc/h', 
-                    type=float, default=400.0)
-    parser.add_argument('--vol-frac', help='Volume fraction of the simulation box', 
-                    type=float, default=0.0019)
-    parser.add_argument('--age-alist-file', help='Path to the age list file, match with .par file',
-                   default=None, type=_abspath)
-    parser.add_argument('--Omega0', help='Omega0 value for the simulation', 
-                    type=float, default=0.3089)
-    parser.add_argument('--h0', help='H0 value for the simulation', 
-                    type=float, default=0.677400)
+    # Inferred from the number of snapshots in the SAGE output.  It survives only
+    # as a fallback for output with no Header/snapshot_redshifts table, and as a
+    # label; everything that matters is resolved from the output itself.
+    parser.add_argument('--sim', help='Snapshot grid (0=Uchuu, 1=Millennium, '
+                   '2=MTNG). Inferred from the SAGE output if omitted; only '
+                   'needed for output with no snapshot redshift table.',
+                   type=int, default=None)
+    # These four are read from the SAGE output's own header by default -- SAGE
+    # records the box size, cosmology and processed volume fraction it actually
+    # ran with, so passing them by hand only creates the opportunity to disagree
+    # with the simulation.  Give one explicitly only to override, and it must
+    # still match the file or the run is refused.
+    parser.add_argument('--boxsize', help='Size of the simulation box in Mpc/h. '
+                    'Read from the SAGE output header if omitted.',
+                    type=float, default=None)
+    parser.add_argument('--vol-frac', help='Fraction of the simulation box processed. '
+                    'Read from the SAGE output header if omitted.',
+                    type=float, default=None)
+    parser.add_argument('--age-alist-file', help='Path to the age list file. Read from '
+                   'the .par file\'s FileWithSnapList, or the SAGE output header, '
+                   'if omitted.', default=None, type=_abspath)
+    parser.add_argument('--Omega0', help='Matter density of the simulation. '
+                    'Read from the SAGE output header if omitted.',
+                    type=float, default=None)
+    parser.add_argument('--h0', help='Hubble parameter of the simulation. '
+                    'Read from the SAGE output header if omitted.',
+                    type=float, default=None)
 
     pso_opts = parser.add_argument_group('PSO options')
     pso_opts.add_argument('-s', '--swarm-size', help='Size of the particle swarm. Defaults to 10 + sqrt(D) * 2 (D=number of dimensions)',
@@ -178,7 +209,7 @@ def main():
     pso_opts.add_argument('-t', '--stat-test', help='Stat function used to calculate the value of a particle, defaults to student-t',
                           default='student-t', choices=list(analysis.stat_tests.keys()))
     pso_opts.add_argument('-x', '--constraints', default='BHMF_z0,SMF_z0,BHBM,HIMF',
-                          help=("Comma-separated list of constraints. Valid names: BHMF_z0, BHMF_z10, SMF_z0, SMF_z05, SMF_z10, SMF_z20, SMF_z30, SMF_z40, BHBM, HIMF, CSFRDH, H2MF, SMD, MZR, SHMR. "
+                          help=("Comma-separated list of constraints. Valid names: BHMF_z0, BHMF_z10, SMF_z0, SMF_z05, SMF_z10, SMF_z20, SMF_z30, SMF_z40, BHBM, HIMF, CSFRDH, H2MF, SMD, MZR, SHMR, FICS, FICS_Mvir, MLF. "
                                 "Can specify a domain range after the name (e.g., 'SMF_z0(8-11)') "
                                 "and/or a relative weight (e.g. 'BHMF_z0*6,SMF_z0(8-11)*10)')") )
     pso_opts.add_argument('-csv', '--csv-output', help='Path to save PSO results as CSV file. If not specified, no CSV will be generated.',
@@ -206,6 +237,24 @@ def main():
 
     if not opts.config:
         parser.error('-c option is mandatory but missing')
+
+    # Refuse to start if any search parameter is absent from the base .par.
+    # execution.py substitutes into lines that already exist and never appends,
+    # so such a parameter never reaches SAGE: every particle would then run
+    # identical physics, the objective would be flat, and the swarm would report
+    # the same best fit for the whole run.  Checked here, before the reference
+    # CSVs are rebuilt, so it costs a second rather than an hour.
+    _absent = execution.missing_from_config(
+        analysis.load_space(opts.space_file), opts.config)
+    if _absent:
+        parser.error(
+            'these search-space parameters are not in %s:\n'
+            '    %s\n'
+            'PSO would sample them and silently discard every value, so every '
+            'particle would run an identical SAGE configuration and the fit '
+            'would never improve. Add them to the parameter file (any value -- '
+            'PSO overwrites it) or point -c at a file that has them.'
+            % (opts.config, '\n    '.join(_absent)))
 
     # ... [Previous imports and setup] ...
 
@@ -281,21 +330,170 @@ def main():
     # 4. Read Simulation Parameters & Detect Structure
     print("Reading simulation parameters...")
     with h5py.File(hdf5_files[0], 'r') as f:
-        # Detect Header
-        if 'Header' in f: header = f['Header'].attrs
-        elif 'Core_0' in f and 'Header' in f['Core_0']: header = f['Core_0']['Header'].attrs
-        else: header = {}
+        # SAGE writes the box size and cosmology it actually ran with into
+        # Header/Simulation.  The old lookup read f['Header'].attrs, which is
+        # empty, and silently fell back to the command-line values -- so a
+        # mismatched --boxsize was never noticed.
+        sim_attrs = {}
+        for grp in ('Header/Simulation', 'Core_0/Header/Simulation'):
+            if grp in f:
+                sim_attrs = dict(f[grp].attrs)
+                break
+        # Older outputs kept them as attributes on Header itself.
+        if not sim_attrs:
+            if 'Header' in f:
+                sim_attrs = dict(f['Header'].attrs)
+            elif 'Core_0' in f and 'Header' in f['Core_0']:
+                sim_attrs = dict(f['Core_0']['Header'].attrs)
 
-        h = header.get('HubbleParam', opts.h0)
-        box = header.get('BoxSize', opts.boxsize)
+        def _attr(*names, default=None):
+            for n in names:
+                if n in sim_attrs:
+                    return float(sim_attrs[n])
+            return default
 
-        # Use user-provided vol_frac from command line arguments
-        # This takes precedence over auto-calculated values from file counts
+        # frac_volume_processed lives on Header/Runtime, not Header/Simulation:
+        # SAGE derives it from FirstFile, LastFile and num_simulation_tree_files.
+        runtime_attrs = {}
+        for grp in ('Header/Runtime', 'Core_0/Header/Runtime'):
+            if grp in f:
+                runtime_attrs = dict(f[grp].attrs)
+                break
+
+        def _rt_attr(*names, default=None):
+            for n in names:
+                if n in runtime_attrs:
+                    return float(runtime_attrs[n])
+            return default
+
+        detected = {
+            'boxsize': _attr('box_size', 'BoxSize'),
+            'h0': _attr('hubble_h', 'HubbleParam'),
+            'Omega0': _attr('omega_matter', 'Omega'),
+            'vol_frac': _rt_attr('frac_volume_processed'),
+        }
+
+        # Resolve each: use the header value, or the explicit flag if the header
+        # does not carry it.  An explicit flag that contradicts the header is an
+        # error rather than an override -- getting the box size wrong rescales
+        # every volume-dependent constraint (the SMF, the mass functions, the
+        # densities) by (ratio)^3, silently, and --sim does not set it (that only
+        # picks the snapshot-to-redshift map).
+        wrong, missing = [], []
+        for name, flag in (('boxsize', '--boxsize'), ('h0', '--h0'),
+                           ('Omega0', '--Omega0'), ('vol_frac', '--vol-frac')):
+            given = getattr(opts, name)
+            found = detected[name]
+            if found is None:
+                if given is None:
+                    missing.append('%s (not in the header either)' % flag)
+                continue
+            if given is not None and abs(found - given) > 1e-6 * max(abs(found), 1.0):
+                wrong.append('%s %g   (the SAGE output says %g)' % (flag, given, found))
+            setattr(opts, name, found)
+
+        if wrong:
+            parser.error(
+                'these contradict the SAGE output in %s:\n    %s\n'
+                'They are read from the output header automatically, so the '
+                'simplest fix is to drop the flags entirely.'
+                % (output_dir, '\n    '.join(wrong)))
+        if missing:
+            parser.error(
+                'the SAGE output in %s does not record these, so they must be '
+                'passed explicitly:\n    %s'
+                % (output_dir, '\n    '.join(missing)))
+
+        # The scale-factor list is recorded in both places: the header of the
+        # output being scored (FileWithSnapList, written by SAGE at run time)
+        # and the .par file SAGE is being run with.  Prefer the header -- it is
+        # the authority on what actually produced this output, consistent with
+        # how the box size and cosmology are resolved above.  The .par is the
+        # fallback for when the recorded path does not exist on this machine
+        # (output copied from a cluster, say).
+        alist_par = None
+        try:
+            with open(opts.config) as pf:
+                for line in pf:
+                    parts = line.split()
+                    if parts and parts[0] == 'FileWithSnapList':
+                        alist_par = parts[1]
+                        break
+        except OSError:
+            pass
+
+        alist_header = sim_attrs.get('FileWithSnapList')
+        if isinstance(alist_header, bytes):
+            alist_header = alist_header.decode('utf-8', 'replace')
+
+        if opts.age_alist_file is None:
+            for candidate, source in ((alist_header, 'the SAGE output header'),
+                                      (alist_par, os.path.basename(opts.config))):
+                if candidate and os.path.exists(candidate):
+                    opts.age_alist_file = os.path.abspath(candidate)
+                    print('  Scale-factor list: %s [from %s]'
+                          % (opts.age_alist_file, source))
+                    break
+            else:
+                tried = [c for c in (alist_par, alist_header) if c]
+                parser.error(
+                    'could not find the scale-factor list automatically, so '
+                    '--age-alist-file must be passed.%s'
+                    % ('' if not tried else
+                       ' Tried:\n    ' + '\n    '.join(tried)))
+        else:
+            recorded = next((c for c in (alist_header, alist_par)
+                             if c and os.path.exists(c)), None)
+            if recorded and os.path.abspath(recorded) != opts.age_alist_file:
+                logger.warning(
+                    '--age-alist-file is %s but the SAGE output/parameter file '
+                    'records %s; using the flag. Omit it to follow the '
+                    'simulation.', opts.age_alist_file, recorded)
+
+        h = opts.h0
+        box = opts.boxsize
         vol_frac = opts.vol_frac
 
         # Calculate Volume (Mpc^3)
         volume = (box / h)**3 * vol_frac
-        print(f"  Volume: {volume:.2e} Mpc^3 (h={h}, Box={box}, Frac={vol_frac:.3f})")
+        print(f"  Volume: {volume:.2e} Mpc^3 (h={h}, Box={box}, Frac={vol_frac:.3f}, "
+              f"Omega0={opts.Omega0}) [from the SAGE output header]")
+
+        # Snapshot-to-redshift mapping, straight from Header/snapshot_redshifts.
+        # Each constraint then gets the snapshot closest to the redshift its
+        # observations were measured at, so the mapping is correct for any
+        # simulation without a per-simulation table to maintain.
+        snap_z, snap_available = read_output_snapshot_redshifts(output_dir)
+        if snap_z is None or not snap_available:
+            resolved_snapshot_map = None
+            if opts.sim is None:
+                parser.error(
+                    'the SAGE output in %s has no snapshot redshift table, so '
+                    'the snapshot-to-redshift mapping cannot be resolved. Pass '
+                    '--sim (0=Uchuu grid, 1=Millennium grid, 2=MTNG) to use the '
+                    'legacy hard-coded table.' % output_dir)
+            print('  WARNING: no snapshot redshift table in the output; falling '
+                  'back to the hard-coded map for --sim %d' % opts.sim)
+        else:
+            resolved_snapshot_map = build_snapshot_map(snap_z, snap_available)
+            # --sim is now only a label and a fallback: identify it from the
+            # snapshot count so it need not be passed.
+            if opts.sim is None:
+                opts.sim = identify_simulation(len(snap_available))
+                if opts.sim is None:
+                    opts.sim = 0
+                    print('  Simulation: %d snapshots, not a known grid; '
+                          '--sim defaulted to 0 (only affects the legacy '
+                          'fallback, which is unused here)'
+                          % len(snap_available))
+                else:
+                    print('  Simulation: %s [inferred from %d snapshots]'
+                          % (get_simulation_config(opts.sim)['name'],
+                             len(snap_available)))
+            print('  Snapshots: %d available, z = %.4f to %.2f [from the SAGE '
+                  'output header]' % (len(snap_available),
+                                      snap_z[snap_available[-1]],
+                                      snap_z[snap_available[0]]))
 
         # Detect Structure Type
         top_keys = list(f.keys())
@@ -308,12 +506,21 @@ def main():
 
     # 5. Define Target Snapshots (z=0, 0.5, 1.0, 2.0, 3.0, 4.0)
     # Use simulation-specific snapshots
-    target_snapshots = get_target_snapshots(opts.sim)
-    print(f"Target Snapshots for sim={opts.sim}: {target_snapshots}")
+    if snap_z is not None and snap_available:
+        target_snapshots = resolve_target_snapshots(snap_z, snap_available)
+        print('Reference epochs: %s  (z = %s)'
+              % (target_snapshots,
+                 ', '.join('%.2f' % snap_z[s] for s in target_snapshots)))
+    else:
+        target_snapshots = get_target_snapshots(opts.sim)
+        print(f"Target Snapshots for sim={opts.sim}: {target_snapshots}")
 
     # Snapshots for History (CSFRDH, SMD) - spanning z=0 to z~4
     # Use simulation-specific snapshots
-    history_snapshots = get_history_snapshots(opts.sim)
+    if snap_z is not None and snap_available:
+        history_snapshots = resolve_history_snapshots(snap_z, snap_available)
+    else:
+        history_snapshots = get_history_snapshots(opts.sim)
 
     # Initialize Data Containers
     smf_data_columns = []
@@ -331,6 +538,7 @@ def main():
     history_t = []
     history_sfrd = []
     history_smd = []
+    history_fics = []
 
     # Define Bins
     binwidth = 0.1
@@ -545,15 +753,33 @@ def main():
             phi = np.full_like(centers, np.nan)
         h2mf_data_columns.extend([centers, phi])
 
-    # --- 6b. Process History Snapshots (CSFRDH & SMD) ---
+    # --- 6b. Process History Snapshots (CSFRDH, SMD & FICS) ---
     print(f"  Processing History ({len(history_snapshots)} snapshots)...")
     from src import routines as r
+    from src.constraints import fics_median
+
+    # f_ICS is a per-halo quantity, so unlike the SFRD and SMD sums it needs the
+    # galaxy arrays of a whole snapshot together (satellites must be matched to
+    # their central).  Collect them per file and concatenate before measuring.
+    fics_fields = ['StellarMass', 'IntraClusterStars', 'Mvir', 'Type',
+                   'GalaxyIndex', 'CentralGalaxyIndex']
 
     for snap_num in history_snapshots:
         snap_key = f"Snap_{snap_num}"
         total_sfr = 0.0
         total_sm = 0.0
         current_z = -1.0
+        fics_chunks = {field: [] for field in fics_fields}
+
+        def _accumulate(loc):
+            """Add one snapshot group's contribution to the running totals."""
+            nonlocal total_sfr, total_sm
+            if 'SfrDisk' in loc: total_sfr += np.sum(loc['SfrDisk'])
+            if 'SfrBulge' in loc: total_sfr += np.sum(loc['SfrBulge'])
+            if 'StellarMass' in loc: total_sm += np.sum(loc['StellarMass']) * 1.0e10 / h
+            if all(field in loc for field in fics_fields):
+                for field in fics_fields:
+                    fics_chunks[field].append(np.array(loc[field]))
 
         for file_path in hdf5_files:
             with h5py.File(file_path, 'r') as f:
@@ -564,17 +790,12 @@ def main():
                         current_z = f[first_core][snap_key].attrs.get('redshift', -1.0)
                         for core in f.keys():
                             if core.startswith('Core_') and snap_key in f[core]:
-                                loc = f[core][snap_key]
-                                if 'SfrDisk' in loc: total_sfr += np.sum(loc['SfrDisk'])
-                                if 'SfrBulge' in loc: total_sfr += np.sum(loc['SfrBulge'])
-                                if 'StellarMass' in loc: total_sm += np.sum(loc['StellarMass']) * 1.0e10 / h
+                                _accumulate(f[core][snap_key])
                 else:
                     if snap_key in f:
                         loc = f[snap_key]
                         current_z = loc.attrs.get('redshift', -1.0)
-                        if 'SfrDisk' in loc: total_sfr += np.sum(loc['SfrDisk'])
-                        if 'SfrBulge' in loc: total_sfr += np.sum(loc['SfrBulge'])
-                        if 'StellarMass' in loc: total_sm += np.sum(loc['StellarMass']) * 1.0e10 / h
+                        _accumulate(loc)
 
         if current_z >= 0:
             z = current_z
@@ -582,10 +803,20 @@ def main():
         else:
             z = 0; tL = 0
 
+        # Median f_ICS over the groups and clusters of this snapshot.  NaN (too
+        # few haloes, or a SAGE build without IntraClusterStars) is written as
+        # the same -99 sentinel the other history columns use.
+        f_ics = np.nan
+        if fics_chunks['StellarMass']:
+            G_snap = {field: np.concatenate(chunks)
+                      for field, chunks in fics_chunks.items()}
+            f_ics, _ = fics_median(G_snap, h)
+
         history_z.append(z)
         history_t.append(tL)
         history_sfrd.append(np.log10(total_sfr / volume) if total_sfr > 0 else -99)
         history_smd.append(np.log10(total_sm / volume) if total_sm > 0 else -99)
+        history_fics.append(f_ics if np.isfinite(f_ics) else -99)
 
     # --- Write All CSV Files (always regenerate) ---
     def write_wide_csv(filename, columns):
@@ -606,17 +837,20 @@ def main():
     write_wide_csv('sage_himf_all_redshifts.csv', himf_data_columns)
     write_wide_csv('sage_h2mf_all_redshifts.csv', h2mf_data_columns)
 
-    # Write History File (Z, Time, SFRD, SMD)
-    hist_data = np.column_stack((history_z, history_t, history_sfrd, history_smd))
+    # Write History File (Z, Time, SFRD, SMD, f_ICS)
+    # f_ICS is a linear fraction, not a log, and -99 marks snapshots with too
+    # few groups and clusters to measure it.
+    hist_data = np.column_stack((history_z, history_t, history_sfrd, history_smd, history_fics))
     np.savetxt(os.path.join(data_dir, 'sage_history.csv'), hist_data,
-            delimiter='\t', header='Redshift\tLookbackTime\tlogSFRD\tlogSMD', comments='')
+            delimiter='\t', header='Redshift\tLookbackTime\tlogSFRD\tlogSMD\tfICS', comments='')
     print(f"Generated {os.path.join(data_dir, 'sage_history.csv')}")
 
     # Determine snapshots needed for constraints
     if opts.snapshot is not None:
         snapshots = opts.snapshot
     else:
-        snapshots = get_required_snapshots(opts.constraints, sim=opts.sim)
+        snapshots = get_required_snapshots(opts.constraints, sim=opts.sim,
+                                           snapshot_map=resolved_snapshot_map)
         opts.snapshot = snapshots
 
     # Create the output directory if it doesn't exist
@@ -632,6 +866,7 @@ def main():
     setup_logging(opts.outdir)
 
     opts.constraints = constraints.parse(opts.constraints, snapshot=opts.snapshot,
+                                    snapshot_map=resolved_snapshot_map,
                                     boxsize=opts.boxsize,
                                     sim=opts.sim,
                                     vol_frac=opts.vol_frac,
@@ -664,7 +899,10 @@ def main():
     logger.info('    Base configuration file: %s', opts.config)
     logger.info('    Subvolumes to use: %r', subvols)
     logger.info('    Output directory: %s', opts.outdir)
-    logger.info('    Simulation Type: %d (0=miniUchuu, 1=miniMillennium, 2=MTNG)', opts.sim)
+    logger.info('    Simulation: %s (snapshots and redshifts resolved from the '
+                'SAGE output header)',
+                get_simulation_config(opts.sim)['name'] if opts.sim is not None
+                else 'inferred from the output')
     logger.info('    Box Size: %.1f', opts.boxsize)
     logger.info('    Volume Fraction: %.4f', opts.vol_frac)
     logger.info('    Age List File: %s', opts.age_alist_file if opts.age_alist_file else 'Using default')
@@ -672,6 +910,13 @@ def main():
     logger.info('    h0: %.4f', opts.h0)
     logger.info('    Keep temporary output files: %d', opts.keep)
     logger.info('    Snapshot Number: %s', opts.snapshot)
+    if resolved_snapshot_map is not None:
+        logger.info("    Snapshot resolution (nearest to each observation's redshift):")
+        active = {c.__class__.__name__ for c in opts.constraints}
+        for line in describe_snapshot_map(
+                {k: v for k, v in resolved_snapshot_map.items() if k in active},
+                snap_z):
+            logger.info('        %s', line)
     logger.info("PSO information:")
     logger.info('    Search space parameters: %s', ' '.join(space['name']))
     logger.info('    Swarm size: %d', ss)
@@ -683,6 +928,17 @@ def main():
     logger.info('        phig (social): %.3f', opts.phig)
     logger.info('    Lower bounds: %r', space['lb'])
     logger.info('    Upper bounds: %r', space['ub'])
+    switches = [space['name'][i] for i in np.flatnonzero(space['is_int'])]
+    if switches:
+        levels = 1
+        for i in np.flatnonzero(space['is_int']):
+            levels *= int(round(space['ub'][i] - space['lb'][i])) + 1
+        logger.info('    Integer switches: %s (%d level combinations)',
+                    ', '.join(switches), levels)
+        logger.info('    Note: a switch makes the objective piecewise constant '
+                    'along that axis, and particles that round to the same '
+                    'level run identical SAGE configurations. For a switch with '
+                    'few levels, separate runs per level are more informative.')
     logger.info('    Test function: %s', opts.stat_test)
 
     logger.info('Constraints:')
@@ -715,8 +971,8 @@ def main():
     logger.info('Starting PSO now')
     tStart = time.time()
     is_log = space['is_log'].astype(bool)
-    lb_pso = np.where(is_log, np.log10(space['lb']), space['lb'])
-    ub_pso = np.where(is_log, np.log10(space['ub']), space['ub'])
+    is_int = space['is_int'].astype(bool)
+    lb_pso, ub_pso = analysis.pso_bounds(space)
     xopt, fopt = pso.pso(f, lb_pso, ub_pso, args=args, swarmsize=ss,
                          maxiter=opts.max_iterations, processes=procs,
                          omega=opts.omega, phip=opts.phip, phig=opts.phig,
@@ -724,23 +980,35 @@ def main():
                          csv_output_path=opts.csv_output,
                          random_seed=opts.random_seed,
                          is_log=is_log,
+                         is_int=is_int,
+                         int_lb=space['lb'], int_ub=space['ub'],
                          max_stagnation=opts.max_stagnation)
     tEnd = time.time()
 
     global count
     #logger.info('Number of iterations = %d', count)
-    logger.info('xopt = %r', xopt)
-    logger.info('fopt = %r', fopt)
-    logger.info('PSO finished in %.3f [s]', tEnd - tStart)
-    logger.info('Checking for SMF, BHBM and BHMF dump files...')
+    logger.info('')
+    logger.info('=' * 62)
+    logger.info(' Best fit   (%s = %.6g,  %d particles x %d iterations,  %.1f s)',
+                opts.stat_test, fopt, ss, opts.max_iterations, tEnd - tStart)
+    logger.info('=' * 62)
+    _lb, _ub = space['lb'], space['ub']
+    for _i, _name in enumerate(space['name']):
+        _v = xopt[_i]
+        # flag a best fit sitting on a bound: that is a bound, not a fit
+        _span = max(_ub[_i] - _lb[_i], 1e-30)
+        _at = ('  <-- at lower bound' if _v <= _lb[_i] + 0.01 * _span else
+               '  <-- at upper bound' if _v >= _ub[_i] - 0.01 * _span else '')
+        _fmt = '%d' % _v if space['is_int'][_i] else '%-12.6g' % _v
+        logger.info('   %-28s %-12s  [%g, %g]%s',
+                    _name, _fmt, _lb[_i], _ub[_i], _at)
+    logger.info('=' * 62)
+    logger.info('')
     dump_files = glob.glob(os.path.join(opts.outdir, 'SMF_z*_dump.txt'))
-    logger.info('Found SMF dump files: %s', dump_files)
     dump_files2 = glob.glob(os.path.join(opts.outdir, 'BHMF_z*_dump.txt'))
-    logger.info('Found BHMF dump files: %s', dump_files2)
     dump_files3 = glob.glob(os.path.join(opts.outdir, 'BHBM_z*_dump.txt'))
-    logger.info('Found BHBM dump files: %s', dump_files3)
 
-    logger.info('Running diagnostics...')
+    logger.info('Producing diagnostics...')
     diagnostics.main(
         tracks_dir=os.path.join(opts.outdir, 'tracks'),
         space_file=opts.space_file, 
